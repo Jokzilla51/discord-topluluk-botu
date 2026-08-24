@@ -1,7 +1,6 @@
 const {
   Client,
   GatewayIntentBits,
-  Partials,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -10,7 +9,6 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  PermissionsBitField,
   PermissionFlagsBits
 } = require('discord.js');
 const express = require('express');
@@ -41,16 +39,12 @@ app.listen(PORT, () => {
 });
 
 // ==========================================
-// 2. DISCORD CLIENT BAŞLATMA
+// 2. DISCORD CLIENT BAŞLATMA (Özel İzin Gerektirmez!)
 // ==========================================
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.MessageContent
-  ],
-  partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
+    GatewayIntentBits.Guilds // Yalnızca temel sunucu izni (Intent hatası vermez)
+  ]
 });
 
 // Çekiliş verilerini geçici hafızada tutma
@@ -154,7 +148,7 @@ const commands = [
 // 4. BOT HAZIR OLDUĞUNDA (READY)
 // ==========================================
 client.once('ready', async () => {
-  console.log(`🤖 Bot giriş yaptı: ${client.user.tag}`);
+  console.log(`🤖 Bot başarıyla giriş yaptı: ${client.user.tag}`);
   client.user.setActivity('🎫 Ticket | 🎉 Çekiliş | 🛡️ Doğrulama', { type: 3 }); // Watching
 
   // Slash komutlarını Discord API'ye yükle
@@ -611,6 +605,6 @@ if (!process.env.TOKEN) {
   console.warn('⚠️ DİKKAT: .env dosyasında TOKEN bulunamadı! Botu başlatmadan önce TOKEN tanımlamalısınız.');
 } else {
   client.login(process.env.TOKEN).catch(err => {
-    console.error('❌ Bot Discord\'a bağlanamadı. Token hatalı veya Intent\'ler kapalı olabilir:', err.message);
+    console.error('❌ Bot Discord\'a bağlanamadı:', err.message);
   });
 }
