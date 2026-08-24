@@ -98,7 +98,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 4. Genel Destek (Ticket) Paneli Kurma (Yalnızca Genel Destek/Şikayet)
+  // 4. Genel Destek (Ticket) Paneli Kurma
   new SlashCommandBuilder()
     .setName('ticket-kur')
     .setDescription('Genel destek ve şikayetler için butonlu ticket paneli oluşturur.')
@@ -165,7 +165,7 @@ const commands = [
         .setRequired(true)
     ),
 
-  // 7. Mesaj Temizleme
+  // 7. Mesaj Temizleme (Moderasyon)
   new SlashCommandBuilder()
     .setName('sil')
     .setDescription('Kanaldaki belirli miktarda mesajı toplu olarak siler.')
@@ -732,4 +732,308 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const kontrolChannel = await interaction.guild.channels.create({
-  
+          name: channelName,
+          type: ChannelType.GuildText,
+          permissionOverwrites
+        });
+
+        // Adaya DM bildirimi
+        try {
+          await applicant.send({
+            content: `🔔 **Vyron Klan Başvurunuz İçin Anydesk Kontrol Odası Açıldı!**\nLütfen sunucumuzdaki ${kontrolChannel} kanalına geçip Anydesk kodunuzu iletiniz.`
+          });
+        } catch (e) {}
+
+        const kontrolEmbed = new EmbedBuilder()
+          .setColor('#F59E0B')
+          .setTitle('🖥️ Vyron Klan - Anydesk & Test Kontrol Odası')
+          .setDescription(
+            `Merhaba ${applicant}! Klan başvurunuz değerlendirmeye alındı ve adınıza özel kontrol odası açıldı.\n\n` +
+            `📌 **Yapmanız Gerekenler:**\n` +
+            `1. [Anydesk](https://anydesk.com) uygulamasını açıp 9 haneli kodunuzu buraya yazın.\n` +
+            `2. Kontrol Yetkiliniz: ${interaction.user}\n` +
+            `3. Ses kanalına (` + '`🔊・Yetkili Ses Odası`' + `) katılın.\n\n` +
+            `Yetkili kontrol durumuna göre aşağıdaki butonları kullanarak sonucu onaylayacaktır:`
+          )
+          .setFooter({ text: 'Vyron Clan Security & Control' })
+          .setTimestamp();
+
+        const kontrolRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`kontrol_pass_${applicant.id}_${clanRoleId}`)
+            .setLabel('✅ Kontrolden Geçti (Klan Rolü Ver)')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('🛡️'),
+          new ButtonBuilder()
+            .setCustomId(`kontrol_fail_${applicant.id}`)
+            .setLabel('❌ Hile / Başarısız (Reddet)')
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(`kontrol_afk_${applicant.id}`)
+            .setLabel('🔒 Odayı Kapat')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        await kontrolChannel.send({
+          content: `📢 ${applicant} ${interaction.user} **Anydesk Kontrol Odası Başlatıldı!**`,
+          embeds: [kontrolEmbed],
+          components: [kontrolRow]
+        });
+
+        const updateEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+          .setColor('#F59E0B')
+          .addFields({ name: '📌 Durum', value: `🔍 ${interaction.user} tarafından kontrol odası açıldı: ${kontrolChannel}`, inline: false });
+
+        await interaction.message.edit({ embeds: [updateEmbed], components: [] });
+
+        return interaction.editReply({
+          content: `✅ ${applicant} için Anydesk kontrol odası başarıyla açıldı: ${kontrolChannel}`
+        });
+      }
+
+      // 2. KONTROLDEN GEÇTİ
+      if (customId.startsWith('kontrol_pass_')) {
+        const parts = customId.split('_');
+        const applicantId = parts[2];
+        const clanRoleId = parts[3];
+
+        const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
+        const clanRole = interaction.guild.roles.cache.get(clanRoleId);
+
+        if (applicant && clanRole) {
+          await applicant.roles.add(clanRole).catch(() => {});
+          try {
+            await applicant.send({
+              content: `🎉 **Tebrikler ${applicant.user.username}!** Vyron klanımızın Anydesk kontrolünden başarıyla geçtiniz ve **${clanRole.name}** rolünüz verildi. Klana hoş geldiniz! ⚔️`
+            });
+          } catch (e) {}
+        }
+
+        const passEmbed = new EmbedBuilder()
+          .setColor('#10B981')
+          .setTitle('🎉 Kontrol Başarılı - Klana Hoş Geldin!')
+          .setDescription(`Tebrikler ${applicant}! Anydesk kontrolünden başarıyla geçtiniz ve **${clanRole ? clanRole.name : 'Klan Üyesi'}** rolü tanımlandı!\n\n🔒 Bu oda 5 saniye içinde kapatılacaktır.`);
+
+        await interaction.reply({ embeds: [passEmbed] });
+
+        setTimeout(async () => {
+          await interaction.channel.delete().catch(() => {});
+        }, 5000);
+        return;
+      }
+
+      // 3. KONTROL BAŞARISIZ
+      if (customId.startsWith('kontrol_fail_')) {
+        const parts = customId.split('_');
+        const applicantId = parts[2];
+        const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
+
+        if (applicant) {
+          try {
+            await applicant.send({
+              content: `❌ Merhaba, Vyron klan başvurunuz Anydesk kontrolü sonucunda yetkililer tarafından **reddedilmiştir**.`
+            });
+          } catch (e) {}
+        }
+
+        const failEmbed = new EmbedBuilder()
+          .setColor('#EF4444')
+          .setTitle('❌ Kontrol Başarısız')
+          .setDescription(`${applicant ? applicant.user.tag : 'Aday'} klan kontrolünden geçemedi. Oda 5 saniye içinde kapatılacaktır.`);
+
+        await interaction.reply({ embeds: [failEmbed] });
+
+        setTimeout(async () => {
+          await interaction.channel.delete().catch(() => {});
+        }, 5000);
+        return;
+      }
+
+      // 4. ODAYI KAPAT
+      if (customId.startsWith('kontrol_afk_')) {
+        const afkEmbed = new EmbedBuilder()
+          .setColor('#6B7280')
+          .setTitle('🔒 Oda Kapatılıyor')
+          .setDescription(`Kontrol odası yetkili tarafından sonlandırıldı. 5 saniye içinde siliniyor...`);
+
+        await interaction.reply({ embeds: [afkEmbed] });
+
+        setTimeout(async () => {
+          await interaction.channel.delete().catch(() => {});
+        }, 5000);
+        return;
+      }
+
+      // 5. DOĞRUDAN KABUL ET
+      if (customId.startsWith('app_accept_')) {
+        const parts = customId.split('_');
+        const applicantId = parts[2];
+        const clanRoleId = parts[3];
+
+        const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
+        const clanRole = interaction.guild.roles.cache.get(clanRoleId);
+
+        if (!applicant) {
+          return interaction.reply({ content: '❌ Aday sunucudan ayrılmış!', ephemeral: true });
+        }
+
+        if (clanRole) {
+          await applicant.roles.add(clanRole).catch(() => {});
+          try {
+            await applicant.send({
+              content: `🎉 **Tebrikler ${applicant.user.username}!** Vyron klan başvurunuz doğrudan onaylandı ve **${clanRole.name}** rolünüz verildi! ⚔️`
+            });
+          } catch (e) {}
+        }
+
+        const updateEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+          .setColor('#10B981')
+          .addFields({ name: '📢 Sonuç', value: `✅ ${interaction.user} tarafından **KABUL EDİLDİ** ve klan rolü verildi!`, inline: false });
+
+        await interaction.message.edit({ embeds: [updateEmbed], components: [] });
+        return interaction.reply({ content: `✅ ${applicant} klana kabul edildi ve rolü tanımlandı!`, ephemeral: true });
+      }
+
+      // 6. REDDET
+      if (customId.startsWith('app_reject_')) {
+        const parts = customId.split('_');
+        const applicantId = parts[2];
+        const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
+
+        if (applicant) {
+          try {
+            await applicant.send({
+              content: `❌ Merhaba, Vyron klan başvurunuz yetkililer tarafından incelenerek uygun görülmemiştir.`
+            });
+          } catch (e) {}
+        }
+
+        const updateEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+          .setColor('#EF4444')
+          .addFields({ name: '📢 Sonuç', value: `❌ ${interaction.user} tarafından **REDDEDİLDİ**.` });
+
+        await interaction.message.edit({ embeds: [updateEmbed], components: [] });
+        return interaction.reply({ content: `❌ Başvuru reddedildi.`, ephemeral: true });
+      }
+
+      // 7. GENEL DESTEK TICKET OLUŞTURMA
+      if (customId.startsWith('ticket_create_')) {
+        const parts = customId.split('_');
+        const roleId = parts[2];
+        const categoryId = parts[3];
+
+        const channelName = `destek-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+        const existingChannel = interaction.guild.channels.cache.find(c => c.name === channelName);
+
+        if (existingChannel) {
+          return interaction.reply({ content: `⚠️ Zaten açık bir destek talebiniz var: ${existingChannel}`, ephemeral: true });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const ticketChannel = await interaction.guild.channels.create({
+          name: channelName,
+          type: ChannelType.GuildText,
+          parent: (categoryId && categoryId !== 'none') ? categoryId : null,
+          permissionOverwrites: [
+            { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
+          ]
+        });
+
+        if (roleId && roleId !== 'none') {
+          await ticketChannel.permissionOverwrites.create(roleId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true,
+            AttachFiles: true
+          }).catch(() => {});
+        }
+
+        const insideEmbed = new EmbedBuilder()
+          .setColor('#3B82F6')
+          .setTitle(`📩 Genel Destek Talebi: #${ticketChannel.name}`)
+          .setDescription(`Merhaba ${interaction.user}! Sunucu yetkililerimiz en kısa sürede talebinizle ilgilenecektir.\n\nLütfen sorunuzu veya şikayetinizi detaylı yazınız.`)
+          .setTimestamp();
+
+        const closeRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('ticket_close_action').setLabel('🔒 Talebi Kapat').setStyle(ButtonStyle.Danger).setEmoji('🗑️')
+        );
+
+        await ticketChannel.send({ content: `${interaction.user} ${roleId && roleId !== 'none' ? `<@&${roleId}>` : ''}`, embeds: [insideEmbed], components: [closeRow] });
+        return interaction.editReply({ content: `✅ Destek talebiniz açıldı: ${ticketChannel}` });
+      }
+
+      // 8. TICKET KAPATMA
+      if (customId === 'ticket_close_action') {
+        await interaction.reply({ embeds: [new EmbedBuilder().setColor('#EF4444').setDescription('🔒 Destek talebi 5 saniye içinde kapatılacak...')] });
+        setTimeout(async () => {
+          await interaction.channel.delete().catch(() => {});
+        }, 5000);
+        return;
+      }
+
+      // 9. DOĞRULAMA
+      if (customId.startsWith('verify_role_')) {
+        const roleId = customId.replace('verify_role_', '');
+        const role = interaction.guild.roles.cache.get(roleId);
+
+        if (!role) return interaction.reply({ content: '❌ Rol bulunamadı!', ephemeral: true });
+
+        const member = interaction.member;
+        if (member.roles.cache.has(role.id)) {
+          return interaction.reply({ content: 'ℹ️ Zaten doğrulanmışsınız!', ephemeral: true });
+        }
+
+        await member.roles.add(role).catch(() => {});
+        return interaction.reply({ content: `✅ Başarıyla doğrulandınız! **${role.name}** rolü verildi. Hoş geldiniz! 🎉`, ephemeral: true });
+      }
+
+      // 10. ÇEKİLİŞ KATILMA
+      if (customId.startsWith('gw_join_')) {
+        const giveawayId = customId.replace('gw_join_', '');
+        const gw = activeGiveaways.get(giveawayId);
+
+        if (!gw) return interaction.reply({ content: '❌ Çekiliş sona ermiş.', ephemeral: true });
+
+        const userId = interaction.user.id;
+        let joined = false;
+
+        if (gw.participants.has(userId)) {
+          gw.participants.delete(userId);
+          joined = false;
+        } else {
+          gw.participants.add(userId);
+          joined = true;
+        }
+
+        const updatedCount = gw.participants.size;
+        const updatedRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`gw_join_${giveawayId}`).setLabel(`🎉 Katıl (${updatedCount})`).setStyle(ButtonStyle.Success)
+        );
+
+        const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0]).setFooter({ text: `${updatedCount} Katılımcı • ID: ${giveawayId}` });
+        await interaction.message.edit({ embeds: [updatedEmbed], components: [updatedRow] });
+
+        return interaction.reply({
+          content: joined ? `🎉 **${gw.prize}** çekilişine katıldınız!` : `⚠️ Çekilişten ayrıldınız.`,
+          ephemeral: true
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Etkileşim hatası:', error);
+  }
+});
+
+// ==========================================
+// 6. GİRİŞ YAPMA (LOGIN)
+// ==========================================
+if (!process.env.TOKEN) {
+  console.warn('⚠️ DİKKAT: TOKEN bulunamadı!');
+} else {
+  client.login(process.env.TOKEN).catch(err => {
+    console.error('❌ Bot Discord\'a bağlanamadı:', err.message);
+  });
+}
