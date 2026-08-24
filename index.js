@@ -159,14 +159,39 @@ client.once('ready', async () => {
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
   try {
-    console.log('⚡ Slash (/) komutları Discord API\'ye kaydediliyor...');
+    console.log('⚡ Komutlar sunucunuza anında (0 saniye gecikmeyle) yükleniyor...');
+    
+    // 1. Botun bulunduğu tüm sunuculara anında yükle (Bekleme süresi 0 olur!)
+    const guilds = await client.guilds.fetch();
+    for (const [guildId] of guilds) {
+      await rest.put(
+        Routes.applicationGuildCommands(client.user.id, guildId),
+        { body: commands.map(cmd => cmd.toJSON()) }
+      );
+      console.log(`✅ Komutlar bu sunucuya anında yüklendi: ${guildId}`);
+    }
+
+    // 2. Global olarak da kaydet
     await rest.put(
       Routes.applicationCommands(client.user.id),
       { body: commands.map(cmd => cmd.toJSON()) }
     );
-    console.log('✅ Vyron komutları başarıyla kaydedildi!');
   } catch (error) {
     console.error('❌ Komut kaydı hatası:', error);
+  }
+});
+
+// Yeni sunucuya eklendiğinde de anında komutları yükle
+client.on('guildCreate', async (guild) => {
+  try {
+    const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+    await rest.put(
+      Routes.applicationGuildCommands(client.user.id, guild.id),
+      { body: commands.map(cmd => cmd.toJSON()) }
+    );
+    console.log(`✅ Yeni sunucuya komutlar anında yüklendi: ${guild.name}`);
+  } catch (err) {
+    console.error('Yeni sunucu komut yükleme hatası:', err);
   }
 });
 
@@ -205,7 +230,7 @@ client.on('interactionCreate', async (interaction) => {
         const autoPanels = interaction.options.getBoolean('otomatik_paneller') ?? true;
         const guild = interaction.guild;
 
-        // Mevcut rolleri eşleştirme (Fotoğraftaki isimlerle)
+        // Mevcut rolleri eşleştirme
         const memberRole = guild.roles.cache.find(r => r.name.includes('Üye') || r.name.includes('Vyron • Üye')) || guild.roles.everyone;
         const clanMemberRole = guild.roles.cache.find(r => r.name.includes('Klan Üye') || r.name.includes('Has Klan'));
         const staffRole = guild.roles.cache.find(r => r.name.includes('Yönetici') || r.name.includes('Yetkili') || r.name.includes('Admin') || r.name.includes('Mod'));
