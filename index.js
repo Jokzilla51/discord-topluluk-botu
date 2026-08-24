@@ -24,9 +24,9 @@ const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => {
   res.send(`
     <html>
-      <head><title>Discord Bot Durumu</title></head>
+      <head><title>Vyron Discord Botu</title></head>
       <body style="font-family: Arial, sans-serif; text-align: center; padding-top: 50px; background-color: #0f172a; color: #fff;">
-        <h1 style="color: #38bdf8;">🤖 Discord Hepsi-Bir-Arada Botu</h1>
+        <h1 style="color: #38bdf8;">⚔️ Vyron Klan & Topluluk Botu</h1>
         <p style="font-size: 18px; color: #4ade80;">✅ Durum: 7/24 Aktif ve Çalışıyor!</p>
         <p style="color: #94a3b8;">Render Web Service üzerinde barındırılıyor.</p>
       </body>
@@ -39,27 +39,36 @@ app.listen(PORT, () => {
 });
 
 // ==========================================
-// 2. DISCORD CLIENT BAŞLATMA (Özel İzin Gerektirmez!)
+// 2. DISCORD CLIENT
 // ==========================================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds // Yalnızca temel sunucu izni (Intent hatası vermez)
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
-// Çekiliş verilerini geçici hafızada tutma
+// Aktif çekiliş hafızası
 const activeGiveaways = new Map();
 
 // ==========================================
-// 3. SLASH KOMUTLARININ TANIMLANMASI
+// 3. SLASH KOMUTLARI
 // ==========================================
 const commands = [
-  // 1. Yardım Komutu
+  // 1. Yardım
   new SlashCommandBuilder()
     .setName('yardim')
-    .setDescription('Botun tüm komutlarını ve kullanım kılavuzunu gösterir.'),
+    .setDescription('Botun tüm komutlarını ve Vyron klan yönetim kılavuzunu gösterir.'),
 
-  // 2. Ticket / Destek Paneli Kurma
+  // 2. Sunucu Baştan Aşağı Kurma (Vyron Özel Şablonu)
+  new SlashCommandBuilder()
+    .setName('sunucu-kur')
+    .setDescription('Vyron klanı için tüm kategori, sohbet, klan, yetkili ve ses kanallarını otomatik kurar.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addBooleanOption(option =>
+      option.setName('otomatik_paneller')
+        .setDescription('Doğrulama, Ticket ve Kurallar panellerini de otomatik kursun mu? (Varsayılan: Evet)')
+        .setRequired(false)
+    ),
+
+  // 3. Ticket / Destek Paneli Kurma
   new SlashCommandBuilder()
     .setName('ticket-kur')
     .setDescription('Kanalda butonlu destek talebi (ticket) paneli oluşturur.')
@@ -80,14 +89,9 @@ const commands = [
         .setDescription('Ticket kanallarının açılacağı kategori')
         .setRequired(false)
         .addChannelTypes(ChannelType.GuildCategory)
-    )
-    .addStringOption(option =>
-      option.setName('aciklama')
-        .setDescription('Panelde yazacak özel açıklama')
-        .setRequired(false)
     ),
 
-  // 3. Çekiliş Başlatma
+  // 4. Çekiliş Başlatma
   new SlashCommandBuilder()
     .setName('cekilis')
     .setDescription('Sunucuda süreli ve ödüllü çekiliş başlatır.')
@@ -99,24 +103,22 @@ const commands = [
     )
     .addStringOption(option =>
       option.setName('odul')
-        .setDescription('Çekiliş ödülü (Örn: Discord Nitro, 1000 Robux)')
+        .setDescription('Çekiliş ödülü (Örn: Discord Nitro, Elit Hesap)')
         .setRequired(true)
     )
     .addIntegerOption(option =>
       option.setName('kazanan_sayisi')
         .setDescription('Kaç kişi kazanacak? (Varsayılan: 1)')
         .setRequired(false)
-        .setMinValue(1)
-        .setMaxValue(20)
     )
     .addChannelOption(option =>
       option.setName('kanal')
-        .setDescription('Çekilişin yapılacağı kanal (Varsayılan: mevcut kanal)')
+        .setDescription('Çekilişin yapılacağı kanal')
         .setRequired(false)
         .addChannelTypes(ChannelType.GuildText)
     ),
 
-  // 4. Doğrulama Paneli Kurma
+  // 5. Doğrulama Paneli Kurma
   new SlashCommandBuilder()
     .setName('dogrulama-kur')
     .setDescription('Sunucuya giren üyeler için butonlu doğrulama paneli kurar.')
@@ -129,18 +131,21 @@ const commands = [
     )
     .addRoleOption(option =>
       option.setName('verilecek_rol')
-        .setDescription('Doğrulama butonuna basana verilecek rol (Örn: @Üye)')
+        .setDescription('Doğrulama butonuna basana verilecek rol (Örn: Vyron • Üye)')
         .setRequired(true)
-    )
-    .addStringOption(option =>
-      option.setName('baslik')
-        .setDescription('Panel başlığı (Varsayılan: Sunucu Doğrulama)')
-        .setRequired(false)
-    )
-    .addStringOption(option =>
-      option.setName('aciklama')
-        .setDescription('Panel açıklaması')
-        .setRequired(false)
+    ),
+
+  // 6. Mesaj Temizleme (Moderasyon)
+  new SlashCommandBuilder()
+    .setName('sil')
+    .setDescription('Kanaldaki belirli miktarda mesajı toplu olarak siler.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    .addIntegerOption(option =>
+      option.setName('miktar')
+        .setDescription('Silinecek mesaj sayısı (1-100)')
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(100)
     )
 ];
 
@@ -148,10 +153,9 @@ const commands = [
 // 4. BOT HAZIR OLDUĞUNDA (READY)
 // ==========================================
 client.once('ready', async () => {
-  console.log(`🤖 Bot başarıyla giriş yaptı: ${client.user.tag}`);
-  client.user.setActivity('🎫 Ticket | 🎉 Çekiliş | 🛡️ Doğrulama', { type: 3 }); // Watching
+  console.log(`🤖 Vyron Bot başarıyla aktif: ${client.user.tag}`);
+  client.user.setActivity('⚔️ Vyron Klanı & Topluluğu', { type: 3 });
 
-  // Slash komutlarını Discord API'ye yükle
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
   try {
@@ -160,14 +164,14 @@ client.once('ready', async () => {
       Routes.applicationCommands(client.user.id),
       { body: commands.map(cmd => cmd.toJSON()) }
     );
-    console.log('✅ Slash komutları başarıyla kaydedildi!');
+    console.log('✅ Vyron komutları başarıyla kaydedildi!');
   } catch (error) {
-    console.error('❌ Slash komutları kaydedilirken hata oluştu:', error);
+    console.error('❌ Komut kaydı hatası:', error);
   }
 });
 
 // ==========================================
-// 5. ETKİLEŞİMLER (COMMAND & BUTTON HANDLER)
+// 5. ETKİLEŞİM VE İŞLEMLER
 // ==========================================
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -178,41 +182,257 @@ client.on('interactionCreate', async (interaction) => {
       // 1. /yardim
       if (commandName === 'yardim') {
         const helpEmbed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setTitle('📚 Bot Komut ve Yönetim Kılavuzu')
-          .setDescription('Botumuz 3 ana sistem üzerine kurulmuştur: **Ticket, Çekiliş ve Doğrulama**.')
+          .setColor('#8B5CF6')
+          .setTitle('⚔️ Vyron Klan Botu Komut Merkezi')
+          .setDescription('Vyron klanı ve topluluğu için optimize edilmiş yönetim sistemleri:')
           .addFields(
-            {
-              name: '🎫 Destek (Ticket) Sistemi',
-              value: '`/ticket-kur [kanal] [yetkili_rol] [kategori] [aciklama]`\nBelirttiğiniz kanala şık bir destek paneli gönderir. Kullanıcılar tek tıkla özel oda açar.'
-            },
-            {
-              name: '🎉 Çekiliş (Giveaway) Sistemi',
-              value: '`/cekilis [sure] [odul] [kazanan_sayisi] [kanal]`\nOtomatik butonlu, süresi bitince rastgele kazananı seçip etiketleyen çekiliş başlatır.'
-            },
-            {
-              name: '🛡️ Doğrulama (Verification) Sistemi',
-              value: '`/dogrulama-kur [kanal] [verilecek_rol] [baslik] [aciklama]`\nSunucuya yeni katılanların butona basarak rol alıp içeri girmesini sağlar.'
-            }
+            { name: '🏛️ `/sunucu-kur`', value: 'Tüm klan kategorilerini, sohbetlerini, klan ses odalarını ve yetkili odalarını otomatik sıfırdan kurar.' },
+            { name: '🎫 `/ticket-kur`', value: 'Butonlu destek paneli kurar. Kullanıcıya özel kilitli destek odası açar.' },
+            { name: '🎉 `/cekilis`', value: 'Süreli, butonlu ve otomatik kazanan seçen çekiliş başlatır.' },
+            { name: '🛡️ `/dogrulama-kur`', value: 'Gelen üyeler için tek tıkla rol veren doğrulama paneli oluşturur.' },
+            { name: '🧹 `/sil`', value: 'Kanaldaki istenmeyen mesajları topluca siler (1-100 adet).' }
           )
-          .setFooter({ text: `${interaction.guild.name} • 7/24 Aktif`, iconURL: interaction.guild.iconURL() })
+          .setFooter({ text: 'Vyron Clan Management System' })
           .setTimestamp();
 
         return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
       }
 
-      // 2. /ticket-kur
+      // 2. /sunucu-kur (TÜM SUNUCUYU OTOMATİK KURMA)
+      if (commandName === 'sunucu-kur') {
+        await interaction.deferReply({ ephemeral: true });
+
+        const autoPanels = interaction.options.getBoolean('otomatik_paneller') ?? true;
+        const guild = interaction.guild;
+
+        // Mevcut rolleri eşleştirme (Fotoğraftaki isimlerle)
+        const memberRole = guild.roles.cache.find(r => r.name.includes('Üye') || r.name.includes('Vyron • Üye')) || guild.roles.everyone;
+        const clanMemberRole = guild.roles.cache.find(r => r.name.includes('Klan Üye') || r.name.includes('Has Klan'));
+        const staffRole = guild.roles.cache.find(r => r.name.includes('Yönetici') || r.name.includes('Yetkili') || r.name.includes('Admin') || r.name.includes('Mod'));
+        const ticketStaffRole = guild.roles.cache.find(r => r.name.includes('Ticket') || r.name.includes('Destek')) || staffRole || guild.roles.everyone;
+
+        await interaction.editReply({ content: '⚙️ **Vyron Sunucu Kurulumu Başlatıldı!** Kategoriler ve kanallar inşa ediliyor, lütfen birkaç saniye bekleyin...' });
+
+        // --- 1. BİLGİLENDİRME & GİRİŞ KATEGORİSİ ---
+        const catInfo = await guild.channels.create({
+          name: '📢・VYRON BİLGİLENDİRME',
+          type: ChannelType.GuildCategory
+        });
+
+        const chRules = await guild.channels.create({
+          name: '📜・kurallar',
+          type: ChannelType.GuildText,
+          parent: catInfo.id,
+          permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.SendMessages] }]
+        });
+
+        const chAnnounce = await guild.channels.create({
+          name: '📢・duyurular',
+          type: ChannelType.GuildText,
+          parent: catInfo.id,
+          permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.SendMessages] }]
+        });
+
+        const chVerify = await guild.channels.create({
+          name: '🛡️・doğrulama',
+          type: ChannelType.GuildText,
+          parent: catInfo.id,
+          permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.SendMessages] }]
+        });
+
+        const chGiveaway = await guild.channels.create({
+          name: '🎉・çekilişler',
+          type: ChannelType.GuildText,
+          parent: catInfo.id,
+          permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.SendMessages] }]
+        });
+
+        const chSocial = await guild.channels.create({
+          name: '🌐・sosyal-medya',
+          type: ChannelType.GuildText,
+          parent: catInfo.id,
+          permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.SendMessages] }]
+        });
+
+        // --- 2. VYRON GENEL TOPLULUK SOHBETİ ---
+        const catChat = await guild.channels.create({
+          name: '💬・VYRON GENEL TOPLULUK',
+          type: ChannelType.GuildCategory
+        });
+
+        await guild.channels.create({ name: '💬・sohbet', type: ChannelType.GuildText, parent: catChat.id });
+        await guild.channels.create({ name: '📸・foto-medya', type: ChannelType.GuildText, parent: catChat.id });
+        await guild.channels.create({ name: '🤖・bot-komut', type: ChannelType.GuildText, parent: catChat.id });
+        await guild.channels.create({ name: '💡・öneri-anket', type: ChannelType.GuildText, parent: catChat.id });
+
+        // --- 3. VYRON KLAN ÖZEL BÖLÜMÜ (KLAN ÜYELERİNE ÖZEL) ---
+        const clanOverwrites = [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] }
+        ];
+        if (clanMemberRole) {
+          clanOverwrites.push({
+            id: clanMemberRole.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect]
+          });
+        }
+        if (staffRole) {
+          clanOverwrites.push({
+            id: staffRole.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect]
+          });
+        }
+
+        const catClan = await guild.channels.create({
+          name: '⚔️・VYRON KLAN MERKEZİ',
+          type: ChannelType.GuildCategory,
+          permissionOverwrites: clanOverwrites
+        });
+
+        await guild.channels.create({ name: '📜・klan-duyuru', type: ChannelType.GuildText, parent: catClan.id });
+        await guild.channels.create({ name: '⚔️・klan-sohbet', type: ChannelType.GuildText, parent: catClan.id });
+        await guild.channels.create({ name: '🎯・klan-taktik-sandık', type: ChannelType.GuildText, parent: catClan.id });
+        await guild.channels.create({ name: '🔊・Klan Ses 1', type: ChannelType.GuildVoice, parent: catClan.id, userLimit: 5 });
+        await guild.channels.create({ name: '🔊・Klan Ses 2', type: ChannelType.GuildVoice, parent: catClan.id, userLimit: 10 });
+        await guild.channels.create({ name: '🔊・Klan Toplantı', type: ChannelType.GuildVoice, parent: catClan.id });
+
+        // --- 4. GENEL SES ODALARI ---
+        const catVoice = await guild.channels.create({
+          name: '🔊・GENEL SES ODALARI',
+          type: ChannelType.GuildCategory
+        });
+
+        await guild.channels.create({ name: '🔊・Sohbet Odası #1', type: ChannelType.GuildVoice, parent: catVoice.id });
+        await guild.channels.create({ name: '🔊・Sohbet Odası #2', type: ChannelType.GuildVoice, parent: catVoice.id });
+        await guild.channels.create({ name: '🎮・Oyun Odası (Duo)', type: ChannelType.GuildVoice, parent: catVoice.id, userLimit: 2 });
+        await guild.channels.create({ name: '🎮・Oyun Odası (Trio)', type: ChannelType.GuildVoice, parent: catVoice.id, userLimit: 3 });
+        await guild.channels.create({ name: '🎮・Oyun Odası (Squad)', type: ChannelType.GuildVoice, parent: catVoice.id, userLimit: 4 });
+        await guild.channels.create({ name: '💤・AFK / Dinlenme', type: ChannelType.GuildVoice, parent: catVoice.id });
+
+        // --- 5. DESTEK VE TICKET KATEGORİSİ ---
+        const catTicket = await guild.channels.create({
+          name: '🎫・VYRON DESTEK MERKEZİ',
+          type: ChannelType.GuildCategory
+        });
+
+        const chTicketPanel = await guild.channels.create({
+          name: '📩・destek-talebi',
+          type: ChannelType.GuildText,
+          parent: catTicket.id,
+          permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.SendMessages] }]
+        });
+
+        // --- 6. YETKİLİ YÖNETİM MERKEZİ (GİZLİ) ---
+        const staffOverwrites = [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] }
+        ];
+        if (staffRole) {
+          staffOverwrites.push({
+            id: staffRole.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect]
+          });
+        }
+
+        const catStaff = await guild.channels.create({
+          name: '🛡️・YETKİLİ MERKEZİ',
+          type: ChannelType.GuildCategory,
+          permissionOverwrites: staffOverwrites
+        });
+
+        await guild.channels.create({ name: '🔒・yetkili-sohbet', type: ChannelType.GuildText, parent: catStaff.id });
+        await guild.channels.create({ name: '📋・yetkili-duyuru', type: ChannelType.GuildText, parent: catStaff.id });
+        await guild.channels.create({ name: '🔨・ceza-kayıt-log', type: ChannelType.GuildText, parent: catStaff.id });
+        await guild.channels.create({ name: '🔊・Yetkili Ses Odası', type: ChannelType.GuildVoice, parent: catStaff.id });
+        await guild.channels.create({ name: '🔊・Yönetim Toplantı Odası', type: ChannelType.GuildVoice, parent: catStaff.id });
+
+        // --- OTOMATİK PANELLERİ GÖNDERME ---
+        if (autoPanels) {
+          // 1. Kurallar Mesajı
+          const rulesEmbed = new EmbedBuilder()
+            .setColor('#EF4444')
+            .setTitle(`📜 ${guild.name} - Sunucu Kuralları`)
+            .setDescription(
+              '**1.** Saygı ve nezaket esastır. Küfür, hakaret ve argo yasaktır.\n' +
+              '**2.** Reklam yapmak (DM dahil) kesinlikle yasaktır ve sınırsız uzaklaştırma sebebidir.\n' +
+              '**3.** Dini, milli, ırkçı ve siyasi tartışmalar yapmak yasaktır.\n' +
+              '**4.** Spam, flood ve gereksiz büyük harf (CAPS) kullanımı yasaktır.\n' +
+              '**5.** Yetkililerin uyarılarına ve kararlarına uymak zorunludur.\n\n' +
+              '*(Sunucuda bulunan herkes bu kuralları okumuş ve kabul etmiş sayılır.)*'
+            )
+            .setFooter({ text: 'Vyron Clan • Adaletli ve Güvenli Topluluk' })
+            .setTimestamp();
+          await chRules.send({ embeds: [rulesEmbed] });
+
+          // 2. Doğrulama Paneli
+          if (memberRole && memberRole.id !== guild.roles.everyone.id) {
+            const verifyEmbed = new EmbedBuilder()
+              .setColor('#10B981')
+              .setTitle(`🛡️ ${guild.name} - Doğrulama ve Giriş`)
+              .setDescription(
+                'Vyron sunucusuna hoş geldiniz!\n\n' +
+                'Kanallara erişim sağlamak, klan sohbetlerine katılmak ve sunucuya tam erişim kazanmak için aşağıdaki **"✅ Doğrula ve Giriş Yap"** butonuna basınız.'
+              )
+              .setFooter({ text: 'Vyron Güvenlik Sistemi' });
+
+            const verifyRow = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`verify_role_${memberRole.id}`)
+                .setLabel('✅ Doğrula ve Giriş Yap')
+                .setStyle(ButtonStyle.Success)
+                .setEmoji('🛡️')
+            );
+            await chVerify.send({ embeds: [verifyEmbed], components: [verifyRow] });
+          }
+
+          // 3. Ticket Paneli
+          const ticketEmbed = new EmbedBuilder()
+            .setColor('#3B82F6')
+            .setTitle(`📩 ${guild.name} - Destek Talebi Paneli`)
+            .setDescription(
+              'Vyron yetkili ekibine ulaşmak, klan başvurusu yapmak, şikayet veya öneride bulunmak için aşağıdaki butona basarak özel destek odası açabilirsiniz.'
+            )
+            .addFields(
+              { name: '⏰ Destek', value: '7/24 Talep Oluşturabilirsiniz.', inline: true },
+              { name: '🛡️ Yetkili Ekip', value: `${ticketStaffRole || 'Yetkililer'}`, inline: true }
+            )
+            .setFooter({ text: 'Lütfen gereksiz yere talep açmayınız.' });
+
+          const ticketRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`ticket_create_${ticketStaffRole.id}_${catTicket.id}`)
+              .setLabel('📩 Destek Talebi Aç')
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji('🎫')
+          );
+          await chTicketPanel.send({ embeds: [ticketEmbed], components: [ticketRow] });
+        }
+
+        const successEmbed = new EmbedBuilder()
+          .setColor('#10B981')
+          .setTitle('🎉 Vyron Sunucu Kurulumu Başarıyla Tamamlandı!')
+          .setDescription('Sunucunuz baştan aşağı profesyonel bir klan ve topluluk düzenine getirildi.')
+          .addFields(
+            { name: '📢 Bilgilendirme', value: '`#kurallar`, `#duyurular`, `#doğrulama`, `#çekilişler`, `#sosyal-medya`' },
+            { name: '💬 Genel Topluluk', value: '`#sohbet`, `#foto-medya`, `#bot-komut`, `#öneri-anket`' },
+            { name: '⚔️ Vyron Klan Bölümü', value: '`#klan-duyuru`, `#klan-sohbet`, `#klan-taktik`, `3 Ses Kanalı`' },
+            { name: '🔊 Genel Sesler', value: '`Sohbet #1-2`, `Duo/Trio/Squad Oyun Odaları`, `AFK Odası`' },
+            { name: '🎫 Destek & Yetkili', value: '`#destek-talebi`, `#yetkili-sohbet`, `#ceza-kayıt`, `Toplantı Odaları`' }
+          )
+          .setFooter({ text: 'Vyron Clan Pro Server System' })
+          .setTimestamp();
+
+        return interaction.editReply({ content: '', embeds: [successEmbed] });
+      }
+
+      // 3. /ticket-kur
       if (commandName === 'ticket-kur') {
         const targetChannel = interaction.options.getChannel('kanal');
         const supportRole = interaction.options.getRole('yetkili_rol');
         const category = interaction.options.getChannel('kategori');
-        const customDesc = interaction.options.getString('aciklama') || 
-          'Yetkili ekibimizle iletişime geçmek, şikayet veya öneride bulunmak için aşağıdaki **"Destek Talebi Aç"** butonuna tıklayınız.';
 
         const ticketEmbed = new EmbedBuilder()
           .setColor('#3B82F6')
           .setTitle(`📩 ${interaction.guild.name} - Destek Talebi Paneli`)
-          .setDescription(customDesc)
+          .setDescription('Yetkili ekibimizle iletişime geçmek için aşağıdaki **"Destek Talebi Aç"** butonuna tıklayınız.')
           .addFields(
             { name: '⏰ Destek Saatleri', value: '7/24 Talep oluşturabilirsiniz.', inline: true },
             { name: '🛡️ Yetkili Ekip', value: `${supportRole}`, inline: true }
@@ -236,7 +456,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 3. /cekilis
+      // 4. /cekilis
       if (commandName === 'cekilis') {
         const durationStr = interaction.options.getString('sure');
         const prize = interaction.options.getString('odul');
@@ -246,7 +466,7 @@ client.on('interactionCreate', async (interaction) => {
         const durationMs = ms(durationStr);
         if (!durationMs || durationMs < 5000 || durationMs > 30 * 24 * 60 * 60 * 1000) {
           return interaction.reply({
-            content: '❌ Geçersiz süre! Lütfen geçerli bir süre girin (Örn: `30s`, `10m`, `2h`, `1d`). Minimum 5 saniye olmalıdır.',
+            content: '❌ Geçersiz süre! Lütfen geçerli bir süre girin (Örn: `30s`, `10m`, `2h`, `1d`).',
             ephemeral: true
           });
         }
@@ -280,7 +500,6 @@ client.on('interactionCreate', async (interaction) => {
           components: [joinBtn]
         });
 
-        // Çekiliş verisini kaydet
         activeGiveaways.set(giveawayId, {
           channelId: targetChannel.id,
           messageId: giveawayMsg.id,
@@ -296,7 +515,6 @@ client.on('interactionCreate', async (interaction) => {
           ephemeral: true
         });
 
-        // Süre bittiğinde kazananı belirle
         setTimeout(async () => {
           const gw = activeGiveaways.get(giveawayId);
           if (!gw) return;
@@ -318,7 +536,6 @@ client.on('interactionCreate', async (interaction) => {
               await fetchMsg.edit({ embeds: [endedEmbedNoWin], components: [] });
               await fetchChannel.send(`⚠️ **Çekiliş Bitti:** [${gw.prize}] için kimse katılmadı.`);
             } else {
-              // Rastgele kazananları seç
               const shuffled = participantArray.sort(() => 0.5 - Math.random());
               const winners = shuffled.slice(0, Math.min(gw.winnerCount, participantArray.length));
               const winnerMentions = winners.map(id => `<@${id}>`).join(', ');
@@ -348,22 +565,16 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      // 4. /dogrulama-kur
+      // 5. /dogrulama-kur
       if (commandName === 'dogrulama-kur') {
         const targetChannel = interaction.options.getChannel('kanal');
         const role = interaction.options.getRole('verilecek_rol');
-        const title = interaction.options.getString('baslik') || `🛡️ ${interaction.guild.name} Doğrulama`;
-        const desc = interaction.options.getString('aciklama') || 
-          'Sunucumuza hoş geldiniz! Kanallara erişim sağlamak ve bot hesapları engellemek için aşağıdaki **"Doğrula"** butonuna basınız.';
 
         const verifyEmbed = new EmbedBuilder()
           .setColor('#10B981')
-          .setTitle(title)
-          .setDescription(desc)
-          .addFields(
-            { name: '🔑 Verilecek Rol', value: `${role}`, inline: true },
-            { name: '✨ Kolay Doğrulama', value: 'Tek tıkla anında erişim.', inline: true }
-          )
+          .setTitle(`🛡️ ${interaction.guild.name} Doğrulama`)
+          .setDescription('Sunucumuza hoş geldiniz! Kanallara erişim sağlamak için aşağıdaki **"Doğrula"** butonuna basınız.')
+          .addFields({ name: '🔑 Verilecek Rol', value: `${role}`, inline: true })
           .setFooter({ text: `${interaction.guild.name} Güvenlik Sistemi` })
           .setTimestamp();
 
@@ -378,7 +589,18 @@ client.on('interactionCreate', async (interaction) => {
         await targetChannel.send({ embeds: [verifyEmbed], components: [verifyRow] });
 
         return interaction.reply({
-          content: `✅ Doğrulama paneli ${targetChannel} kanalına başarıyla kuruldu! (Rol: ${role})`,
+          content: `✅ Doğrulama paneli ${targetChannel} kanalına kuruldu! (Rol: ${role})`,
+          ephemeral: true
+        });
+      }
+
+      // 6. /sil (Mesaj Silme)
+      if (commandName === 'sil') {
+        const amount = interaction.options.getInteger('miktar');
+        await interaction.channel.bulkDelete(amount, true);
+
+        return interaction.reply({
+          content: `🧹 Başarıyla **${amount}** adet mesaj temizlendi!`,
           ephemeral: true
         });
       }
@@ -388,13 +610,12 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       const customId = interaction.customId;
 
-      // 1. TICKET OLUŞTURMA BUTONU
+      // 1. TICKET OLUŞTURMA
       if (customId.startsWith('ticket_create_')) {
         const parts = customId.split('_');
         const roleId = parts[2];
         const categoryId = parts[3];
 
-        // Kullanıcının daha önce açılmış kanalı var mı kontrol
         const channelName = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
         const existingChannel = interaction.guild.channels.cache.find(c => c.name === channelName);
 
@@ -407,7 +628,6 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.deferReply({ ephemeral: true });
 
-        // İzinler
         const permissionOverwrites = [
           {
             id: interaction.guild.roles.everyone.id,
@@ -432,7 +652,6 @@ client.on('interactionCreate', async (interaction) => {
           }
         ];
 
-        // Yetkili rol izni
         if (roleId && roleId !== 'none') {
           permissionOverwrites.push({
             id: roleId,
@@ -445,7 +664,6 @@ client.on('interactionCreate', async (interaction) => {
           });
         }
 
-        // Kanal oluştur
         const ticketChannel = await interaction.guild.channels.create({
           name: channelName,
           type: ChannelType.GuildText,
@@ -453,13 +671,12 @@ client.on('interactionCreate', async (interaction) => {
           permissionOverwrites
         });
 
-        // Ticket içi bilgilendirme mesajı
         const insideEmbed = new EmbedBuilder()
           .setColor('#3B82F6')
           .setTitle(`📩 Destek Talebi: #${ticketChannel.name}`)
           .setDescription(
             `Merhaba ${interaction.user}! Destek talebiniz oluşturuldu.\n\n` +
-            `Lütfen sorununuzu veya talebinizi detaylı bir şekilde buraya yazın. Yetkili ekibimiz en kısa sürede ilgilenecektir.`
+            `Lütfen sorununuzu veya talebinizi detaylı bir şekilde buraya yazın. Vyron yetkili ekibimiz en kısa sürede ilgilenecektir.`
           )
           .addFields(
             { name: '👤 Talep Sahibi', value: `${interaction.user}`, inline: true },
@@ -486,7 +703,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 2. TICKET KAPATMA BUTONU
+      // 2. TICKET KAPATMA
       if (customId === 'ticket_close_action') {
         const closeEmbed = new EmbedBuilder()
           .setColor('#EF4444')
@@ -504,7 +721,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      // 3. DOĞRULAMA BUTONU
+      // 3. DOĞRULAMA
       if (customId.startsWith('verify_role_')) {
         const roleId = customId.replace('verify_role_', '');
         const role = interaction.guild.roles.cache.get(roleId);
@@ -528,19 +745,19 @@ client.on('interactionCreate', async (interaction) => {
         try {
           await member.roles.add(role);
           return interaction.reply({
-            content: `✅ Başarıyla doğrulandınız! **${role.name}** rolü hesabınıza tanımlandı. Sunucumuza hoş geldiniz! 🎉`,
+            content: `✅ Başarıyla doğrulandınız! **${role.name}** rolü hesabınıza tanımlandı. Vyron sunucusuna hoş geldiniz! ⚔️`,
             ephemeral: true
           });
         } catch (err) {
           console.error('Rol verme hatası:', err);
           return interaction.reply({
-            content: '❌ Rol verilirken bir yetki hatası oluştu! Botun rolü, verilecek rolden yukarıda olmalıdır.',
+            content: '❌ Rol verilirken yetki hatası oluştu! Botun rolü, verilecek rolden listede daha yukarıda olmalıdır.',
             ephemeral: true
           });
         }
       }
 
-      // 4. ÇEKİLİŞE KATILMA BUTONU
+      // 4. ÇEKİLİŞ KATILMA
       if (customId.startsWith('gw_join_')) {
         const giveawayId = customId.replace('gw_join_', '');
         const gw = activeGiveaways.get(giveawayId);
@@ -563,7 +780,6 @@ client.on('interactionCreate', async (interaction) => {
           joined = true;
         }
 
-        // Buton ve Embed güncelle
         const updatedCount = gw.participants.size;
         const updatedRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
@@ -602,7 +818,7 @@ client.on('interactionCreate', async (interaction) => {
 // 6. GİRİŞ YAPMA (LOGIN)
 // ==========================================
 if (!process.env.TOKEN) {
-  console.warn('⚠️ DİKKAT: .env dosyasında TOKEN bulunamadı! Botu başlatmadan önce TOKEN tanımlamalısınız.');
+  console.warn('⚠️ DİKKAT: TOKEN bulunamadı!');
 } else {
   client.login(process.env.TOKEN).catch(err => {
     console.error('❌ Bot Discord\'a bağlanamadı:', err.message);
