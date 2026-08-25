@@ -156,43 +156,40 @@ async function analyzeYoutubeScreenshot(imageUrl) {
       .replace(/ç/g, 'c');
 
     // 1. Çok Dilli Abonelik Doğrulama Anahtar Kelimeleri
-    // Türkçe: abone, olundu, abonesiniz, abonelik, bildirim, zil
+    // Türkçe: abone olundu, abonesiniz, abone, abonelik, bildirim, zil
     // İngilizce: subscribed, subscriber, subscribers, notification, bell
-    // Almanca/Fransızca/İspanyolca: abonniert, abonné, suscrito
     const subKeywords = [
-      'abone', 'olundu', 'abonesiniz', 'abonelik', 'abonedir',
-      'subscribed', 'subscribers', 'subscriber', 'subscribing',
-      'notification', 'notifications', 'bildirim', 'tum bildirimler', 'tum', 'zil', 'bell',
-      'abonniert', 'abonne', 'suscrito'
+      'abone', 'olundu', 'abonesiniz', 'abonelik',
+      'subscribed', 'subscriber', 'subscribers', 'subscribing',
+      'notification', 'notifications', 'bildirim', 'tum bildirimler', 'tum', 'zil', 'bell'
     ];
 
-    // 2. Hedef Kanallar & YouTube Göstergeleri
+    // 2. Hedef Kanallar & Göstergeleri (Fotoğraflardaki kesin isimler)
+    // 1. Kanal: birim (@birimfonksiyons / smp canavarı)
+    // 2. Kanal: Froz (@xFrozzeq)
     const channelKeywords = [
-      'birim', 'fonksiyon', 'birimfonksiyon', 'smp', 'canavari',
-      'froz', 'frozzeq', 'xfrozzeq', 'youtube', 'video', 'kanal', 'channel'
+      'birim', 'birimfonksiyons', 'fonksiyon', 'smp', 'canavari',
+      'froz', 'xfrozzeq', 'frozzeq', 'youtube', 'video', 'videos', 'shorts'
     ];
 
     const matchedSubs = subKeywords.filter(k => cleanText.includes(k));
     const matchedChannels = channelKeywords.filter(k => cleanText.includes(k));
 
-    // 'abone olundu', 'abonesiniz', 'subscribed' gibi doğrudan kanıt veya 'abone' + 'zil/bildirim/youtube'
-    const hasStrongSubProof = cleanText.includes('olundu') ||
+    // Abone olundu veya Subscribed kanıtı
+    const hasSubscribedText = cleanText.includes('subscribed') ||
+                              cleanText.includes('olundu') ||
                               cleanText.includes('abonesiniz') ||
-                              cleanText.includes('subscribed') ||
                               cleanText.includes('abonelikten') ||
-                              cleanText.includes('abonniert') ||
-                              cleanText.includes('suscrito') ||
                               (cleanText.includes('abone') && (cleanText.includes('zil') || cleanText.includes('bildirim') || cleanText.includes('tum') || cleanText.includes('all')));
 
-    const hasChannelProof = matchedChannels.length >= 1 || cleanText.includes('youtube');
+    const hasChannelMatch = matchedChannels.length >= 1 || cleanText.includes('youtube') || cleanText.includes('videos');
 
-    const isValid = hasStrongSubProof || (matchedSubs.length >= 1 && hasChannelProof);
+    const isValid = hasSubscribedText || (matchedSubs.length >= 1 && hasChannelMatch);
 
     return {
       isValid,
       matchedSubs,
-      matchedChannels,
-      extractedSnippet: rawText.substring(0, 160).replace(/\n/g, ' ')
+      matchedChannels
     };
   } catch (error) {
     console.error('Yapay Zeka OCR analiz hatası:', error);
@@ -1021,17 +1018,15 @@ client.on('messageCreate', async (message) => {
 
       const successEmbed = new EmbedBuilder()
         .setColor('#10B981')
-        .setAuthor({ name: 'Vyron Yapay Zeka (AI / OCR) Abone Sistemi', iconURL: guild.iconURL({ dynamic: true }) })
-        .setTitle('🎉 ABONELİĞİNİZ OTOMATİK OLARAK ONAYLANDI!')
+        .setAuthor({ name: 'Vyron Otomatik Abone Onay Sistemi', iconURL: guild.iconURL({ dynamic: true }) })
+        .setTitle('🎉 ABONELİĞİNİZ BAŞARIYLA ONAYLANDI!')
         .setThumbnail(message.author.displayAvatarURL({ dynamic: true, size: 256 }))
         .setDescription(
-          `Tebrikler ${message.author}! Gönderdiğiniz ekran görüntüsü botumuz tarafından incelendi ve **YouTube aboneliğiniz başarıyla doğrulandı.**\n\n` +
-          `🏷️ **Tanımlanan Rol:** ${aboneRole}\n` +
-          `🎁 Artık özel texture packlere, private buton packlerine ve çekilişlere erişebilirsiniz! Keyifli oyunlar. ⚔️💎`
+          `Tebrikler ${message.author}! YouTube kanal aboneliğiniz doğrulandı ve **${aboneRole}** rolünüz verildi.\n\n` +
+          `🎁 Artık özel texture packlere, private buton packlerine ve VIP çekilişlere tam erişebilirsiniz! Keyifli oyunlar dileriz. ⚔️💎`
         )
         .addFields(
-          { name: '🔍 Tespit Edilen Göstergeler', value: `\`${ocrResult.matchedSubs.concat(ocrResult.matchedChannels).join(', ') || 'Abone Olundu / YouTube'}\``, inline: true },
-          { name: '⏰ Onay Tarihi', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true }
+          { name: '⏰ Onay Zamanı', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true }
         )
         .setFooter({ text: FOOTER_TEXT })
         .setTimestamp();
@@ -1048,14 +1043,14 @@ client.on('messageCreate', async (message) => {
       // Yazı Okunamadı veya Abone Olunduğu Görünmüyor
       const failEmbed = new EmbedBuilder()
         .setColor('#EF4444')
-        .setAuthor({ name: 'Vyron Yapay Zeka (AI / OCR) Abone Sistemi', iconURL: guild.iconURL({ dynamic: true }) })
-        .setTitle('⚠️ ABONELİK TESPİT EDİLEMEDİ')
+        .setAuthor({ name: 'Vyron Abone Onay Sistemi', iconURL: guild.iconURL({ dynamic: true }) })
+        .setTitle('⚠️ ABONELİK TESPİT EDİLEMEDİ (TAM EKRAN SS GEREKLİ)')
         .setDescription(
-          `Merhaba ${message.author}! Gönderdiğiniz ekran görüntüsünde **"Abone Olundu"** (veya *Subscribed*) yazısı net olarak okunamadı.\n\n` +
-          `📌 **Lütfen Şunlara Dikkat Ediniz:**\n` +
-          `1️⃣ YouTube kanallarına abone olduğunuz ekranın **kırpılmamış tam ekran görüntüsünü** atınız.\n` +
-          `2️⃣ Görselde **"Abone Olundu"** yazısının ve kanal adının okunaklı ve aydınlık olduğundan emin olunuz.\n\n` +
-          `Tekrar denemek için yeni ve net bir SS yükleyebilirsiniz!`
+          `Merhaba ${message.author}! Gönderdiğiniz görselde **"Abone Olundu"** (veya İngilizce **"Subscribed"**) yazısı ve kanal bilgisi tespit edilemedi.\n\n` +
+          `📌 **ZORUNLU KURALLAR:**\n` +
+          `1️⃣ **KESİNLİKLE TAM EKRAN OLMALIDIR:** Görseli kırpmadan, tüm ekranı kapsayacak şekilde tam ekran SS alınız (Kırpılmış fotoğraflar kabul edilmez).\n` +
+          `2️⃣ **KANAL VE ABONELİK:** [birim](https://www.youtube.com/@birimfonksiyons) veya [Froz](https://www.youtube.com/@xFrozzeq) kanallarında **'Abone Olundu / Subscribed'** butonunun net ve okunaklı gözüktüğünden emin olunuz.\n\n` +
+          `👇 Lütfen kırpılmamış tam ekran görüntünüzü bu kanala tekrar yükleyiniz!`
         )
         .setFooter({ text: FOOTER_TEXT })
         .setTimestamp();
@@ -1153,10 +1148,11 @@ client.on('interactionCreate', async (interaction) => {
             `🔹 **Abonelere özel VIP çekilişler (Gear, Kredi, VIP, Özel Roller)**\n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
             `### 📌 ${roleToUse ? roleToUse : '@Vyron • Abone'} Almak İçin Ne Yapmalısınız?\n\n` +
-            `Sadece yapmanız gereken aşağıdaki YouTube kanallarına abone olup **TAM EKRANLI BİR ŞEKİLDE** ScreenShot (SS) alıp ${chAboneLog ? chAboneLog : '`#abone-kanit`'} kanalına yüklemektir:\n\n` +
+            `Sadece yapmanız gereken aşağıdaki YouTube kanallarına abone olup **KESİNLİKLE KIRPILMAMIŞ TAM EKRAN** ScreenShot (SS) alıp ${chAboneLog ? chAboneLog : '`#abone-kanit`'} kanalına yüklemektir:\n\n` +
             `🎬 **1. Kanal:** [youtube.com/@birimfonksiyons](https://www.youtube.com/@birimfonksiyons) *(birim / smp canavarı)*\n` +
             `🎬 **2. Kanal:** [youtube.com/@xFrozzeq](https://www.youtube.com/@xFrozzeq) *(Froz)*\n\n` +
-            `🤖 **Botumuz ${chAboneLog ? chAboneLog : 'kanala'} attığınız fotoğrafı yapay zeka ile okuyup rolünüzü saniyeler içinde otomatik verecektir!**`
+            `⚠️ **DİKKAT:** Kırpılmış veya sahte fotoğraflar kabul edilmez. Fotoğrafta kanal adı ve **'Abone Olundu'** *(veya İngilizce **'Subscribed'**)* yazısı net gözükmelidir.\n\n` +
+            `🤖 **Botumuz ${chAboneLog ? chAboneLog : 'kanala'} attığınız görseli yapay zeka ile okuyup rolünüzü anında otomatik verecektir!**`
           )
           .setFooter({ text: FOOTER_TEXT })
           .setTimestamp();
