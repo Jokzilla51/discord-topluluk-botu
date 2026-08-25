@@ -56,12 +56,11 @@ app.listen(PORT, () => {
 
 // ==========================================
 // 2. DISCORD CLIENT & BELLEK HAVUZLARI
+// (Disallowed Intents Hatasını Önleyen Standart Guilds Intent)
 // ==========================================
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.Guilds
   ]
 });
 
@@ -2059,21 +2058,6 @@ client.on('interactionCreate', async (interaction) => {
       const guild = interaction.guild;
       const chCleanLog = await getOrCreateCleanLogChannel(guild);
 
-      // Kanala yüklenen ekran görüntüsü varsa tara
-      let finalProofUrl = null;
-      const recentMessages = await interaction.channel.messages.fetch({ limit: 30 }).catch(() => null);
-      if (recentMessages) {
-        for (const [_, msg] of recentMessages) {
-          if (msg.attachments && msg.attachments.size > 0) {
-            const att = msg.attachments.first();
-            if (att && att.url) {
-              finalProofUrl = att.url;
-              break;
-            }
-          }
-        }
-      }
-
       // 3. #temiz-log Kanalına Detaylı Rapor Gönder (ID, Tag, Profil, Rol, Yetkili)
       if (chCleanLog) {
         const userObj = applicant ? applicant.user : { tag: 'Bilinmiyor', id: applicantId, displayAvatarURL: () => client.user.displayAvatarURL() };
@@ -2094,10 +2078,6 @@ client.on('interactionCreate', async (interaction) => {
           )
           .setFooter({ text: FOOTER_TEXT })
           .setTimestamp();
-
-        if (finalProofUrl) {
-          passLogEmbed.setImage(finalProofUrl);
-        }
 
         await chCleanLog.send({ embeds: [passLogEmbed] }).catch(() => {});
       }
@@ -2122,33 +2102,6 @@ client.on('interactionCreate', async (interaction) => {
       const cheatType = interaction.fields.getTextInputValue('cheat_type');
       const cheatNotes = interaction.fields.getTextInputValue('cheat_notes') || 'Belirtilmedi.';
 
-      // Kanala yüklenen son 50 mesajdaki resim attachmentlarını tara
-      let finalSsUrl = null;
-      const recentMessages = await interaction.channel.messages.fetch({ limit: 50 }).catch(() => null);
-      if (recentMessages) {
-        for (const [_, msg] of recentMessages) {
-          if (msg.attachments && msg.attachments.size > 0) {
-            const att = msg.attachments.first();
-            if (att && att.url) {
-              finalSsUrl = att.url;
-              break;
-            }
-          }
-        }
-      }
-
-      // SS Kanıtı Yoksa Net ve Açıklayıcı Seçenek Sun
-      if (!finalSsUrl) {
-        return interaction.reply({
-          content:
-            '⚠️ **HATA: Odaya yüklenmiş bir SS kanıtı algılanamadı!**\n\n' +
-            '📌 **2 Kolay Yoldan Birini Kullanabilirsiniz:**\n' +
-            '1️⃣ Bilgisayarınızdaki resmi bu odaya normal mesaj olarak gönderin (`Ctrl + V` veya dosya yükle), ardından **"🚫 Hile Çıktı"** butonuna tekrar basın.\n' +
-            '2️⃣ Veya doğrudan **/hile-rapor** komutunu yazarak resmi komut kutucuğuna sürükleyip bırakın!',
-          ephemeral: true
-        });
-      }
-
       const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
 
       if (applicant) {
@@ -2163,7 +2116,7 @@ client.on('interactionCreate', async (interaction) => {
       const guild = interaction.guild;
       const chCheatLog = await getOrCreateCheatLogChannel(guild);
 
-      // #hile-log Kanalına Detaylı Rapor Gönder (ID, Tag, Profil, Hile Türü, SS, Yetkili)
+      // #hile-log Kanalına Detaylı Rapor Gönder (ID, Tag, Profil, Hile Türü, Yetkili)
       if (chCheatLog) {
         const userObj = applicant ? applicant.user : { tag: 'Bilinmiyor', id: applicantId, displayAvatarURL: () => client.user.displayAvatarURL() };
 
@@ -2181,7 +2134,6 @@ client.on('interactionCreate', async (interaction) => {
             { name: '⏰ İşlem Tarihi', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
             { name: '📄 Yetkili Açıklaması / Detay', value: `>>> ${cheatNotes}`, inline: false }
           )
-          .setImage(finalSsUrl)
           .setFooter({ text: FOOTER_TEXT })
           .setTimestamp();
 
@@ -2191,7 +2143,7 @@ client.on('interactionCreate', async (interaction) => {
       const failEmbed = new EmbedBuilder()
         .setColor('#EF4444')
         .setTitle('🚫 Kontrol Başarısız (Hile Tespit Edildi & Raporlandı)')
-        .setDescription(`${applicant ? applicant.user.tag : 'Aday'} kontrolden elendi.\n**Hile:** ${cheatType}\n📸 Kanıt SS'i **${chCheatLog || '#hile-log'}** kanalına aktarıldı.\n\n🔒 Bu oda 5 saniye içinde kapatılacaktır.`)
+        .setDescription(`${applicant ? applicant.user.tag : 'Aday'} kontrolden elendi.\n**Hile:** ${cheatType}\n📸 Kayıt **${chCheatLog || '#hile-log'}** kanalına aktarıldı.\n\n🔒 Bu oda 5 saniye içinde kapatılacaktır.`)
         .setFooter({ text: FOOTER_TEXT });
 
       await interaction.reply({ embeds: [failEmbed] });
