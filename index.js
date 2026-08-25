@@ -74,13 +74,13 @@ const commands = [
     .setName('yardim')
     .setDescription('Vyron klan botunun tüm komutlarını ve sistem kılavuzunu gösterir.'),
 
-  // 2. /sunucu-analiz (Eksikleri bulan ve otomatik oluşturan akıllı sistem)
+  // 2. /sunucu-analiz
   new SlashCommandBuilder()
     .setName('sunucu-analiz')
     .setDescription('Sunucuyu analiz eder, eksik kanalları/panelleri tespit edip tek tıkla otomatik kurar.')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-  // 3. /basvuru-kur (Seçmeli Çoklu Yetkili Rol Desteği)
+  // 3. /basvuru-kur
   new SlashCommandBuilder()
     .setName('basvuru-kur')
     .setDescription('Adaya özel ticket açan ve seçtiğiniz yetkili rollerinin yönettiği başvuru paneli kurar.')
@@ -129,7 +129,51 @@ const commands = [
         .addChannelTypes(ChannelType.GuildCategory)
     ),
 
-  // 4. /haftanin-oyuncusu
+  // 4. /duyuru (GÖZ ALICI, HAVALI & MERAK UYANDIRAN ANNOUNCEMENT)
+  new SlashCommandBuilder()
+    .setName('duyuru')
+    .setDescription('Sunucuya dikkat çekici, özel efektli ve merak uyandıran epik klan duyurusu gönderir.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Duyurunun yayınlanacağı kanal (Örn: #duyurular veya #klan-duyuru)')
+        .setRequired(true)
+        .addChannelTypes(ChannelType.GuildText)
+    )
+    .addStringOption(option =>
+      option.setName('baslik')
+        .setDescription('Duyuru başlığı (Örn: BÜYÜK KLAN SAVAŞI, YENİ SEZON BAŞLADI)')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('mesaj')
+        .setDescription('Duyuru metni (Detaylı açıklama)')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('tema')
+        .setDescription('Duyurunun görsel atmosferi ve rengi')
+        .setRequired(false)
+        .addChoices(
+          { name: '🔥 Alev & Kritik Savaş (Kırmızı / Turuncu)', value: 'war' },
+          { name: '👑 Klan Yönetimi & Resmi Bildiri (Mor / Kraliyet)', value: 'royal' },
+          { name: '⚡ Siber Güncelleme & Hype (Neon Mavi)', value: 'cyber' },
+          { name: '🏆 Turnuva & Büyük Ödül (Altın Sarısı)', value: 'gold' },
+          { name: '🛡️ Güvenlik & Önemli Uyarı (Zümrüt Yeşili)', value: 'shield' }
+        )
+    )
+    .addStringOption(option =>
+      option.setName('resim_url')
+        .setDescription('Duyuruya eklenecek görsel/banner/GIF bağlantısı (İsteğe bağlı)')
+        .setRequired(false)
+    )
+    .addBooleanOption(option =>
+      option.setName('herkese_etiket')
+        .setDescription('@everyone etiketi atılsın mı? (Varsayılan: Hayır)')
+        .setRequired(false)
+    ),
+
+  // 5. /haftanin-oyuncusu
   new SlashCommandBuilder()
     .setName('haftanin-oyuncusu')
     .setDescription('Haftanın Trapcisi veya Haftanın Elytracısı unvanını oyuncuya verir ve duyurur.')
@@ -154,7 +198,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 5. /scrim
+  // 6. /scrim
   new SlashCommandBuilder()
     .setName('scrim')
     .setDescription('Klan içi maç için otomatik takım dağıtıcılı scrim lobisi başlatır.')
@@ -176,7 +220,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 6. /kilit
+  // 7. /kilit
   new SlashCommandBuilder()
     .setName('kilit')
     .setDescription('Metin kanalını üye mesajlarına kilitler veya kilidi açar.')
@@ -197,7 +241,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildText)
     ),
 
-  // 7. /klan-rutbe
+  // 8. /klan-rutbe
   new SlashCommandBuilder()
     .setName('klan-rutbe')
     .setDescription('Klan üyesini Has Klan Üyesi yapar veya klandan çıkarır.')
@@ -218,7 +262,7 @@ const commands = [
         )
     ),
 
-  // 8. /ticket-kur
+  // 9. /ticket-kur
   new SlashCommandBuilder()
     .setName('ticket-kur')
     .setDescription('Genel destek ve şikayetler için butonlu ticket paneli oluşturur.')
@@ -241,7 +285,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildCategory)
     ),
 
-  // 9. /cekilis
+  // 10. /cekilis
   new SlashCommandBuilder()
     .setName('cekilis')
     .setDescription('Sunucuda süreli, butonlu ve otomatik kazanan etiketleyen çekiliş başlatır.')
@@ -270,7 +314,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildText)
     ),
 
-  // 10. /reroll
+  // 11. /reroll
   new SlashCommandBuilder()
     .setName('reroll')
     .setDescription('Çekilişten yeni bir kazanan seçer.')
@@ -281,7 +325,7 @@ const commands = [
         .setRequired(true)
     ),
 
-  // 11. /anket
+  // 12. /anket
   new SlashCommandBuilder()
     .setName('anket')
     .setDescription('Canlı sayaçlı resmi oylama başlatır.')
@@ -298,7 +342,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildText)
     ),
 
-  // 12. /mute
+  // 13. /mute
   new SlashCommandBuilder()
     .setName('mute')
     .setDescription('Belirtilen kullanıcıyı süreli olarak susturur (Timeout).')
@@ -319,7 +363,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 13. /unmute
+  // 14. /unmute
   new SlashCommandBuilder()
     .setName('unmute')
     .setDescription('Kullanıcının susturmasını kaldırır.')
@@ -330,7 +374,7 @@ const commands = [
         .setRequired(true)
     ),
 
-  // 14. /kick
+  // 15. /kick
   new SlashCommandBuilder()
     .setName('kick')
     .setDescription('Belirtilen kullanıcıyı sunucudan atar.')
@@ -346,7 +390,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 15. /ban
+  // 16. /ban
   new SlashCommandBuilder()
     .setName('ban')
     .setDescription('Belirtilen kullanıcıyı sunucudan yasaklar.')
@@ -359,33 +403,6 @@ const commands = [
     .addStringOption(option =>
       option.setName('sebep')
         .setDescription('Yasaklanma sebebi')
-        .setRequired(false)
-    ),
-
-  // 16. /duyuru
-  new SlashCommandBuilder()
-    .setName('duyuru')
-    .setDescription('Belirtilen kanala şık bir klan/topluluk duyurusu gönderir.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addChannelOption(option =>
-      option.setName('kanal')
-        .setDescription('Duyurunun yapılacağı kanal')
-        .setRequired(true)
-        .addChannelTypes(ChannelType.GuildText)
-    )
-    .addStringOption(option =>
-      option.setName('baslik')
-        .setDescription('Duyuru başlığı')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option.setName('mesaj')
-        .setDescription('Duyuru metni')
-        .setRequired(true)
-    )
-    .addBooleanOption(option =>
-      option.setName('herkese_etiket')
-        .setDescription('@everyone etiketi atılsın mı? (Varsayılan: Hayır)')
         .setRequired(false)
     ),
 
@@ -508,7 +525,7 @@ client.on('interactionCreate', async (interaction) => {
             },
             {
               name: '🎉 Çekiliş, Anket & Topluluk',
-              value: '• `/anket` : Canlı sayaçlı ve çift oy korumalı oylama başlatır.\n• `/cekilis` : Kazananları otomatik etiketleyen çekiliş sistemi.\n• `/reroll` : Çekilişten yeni kazanan seçer.\n• `/duyuru` : Şık klan ve sunucu duyurusu yayınlar.\n• `/kullanici-bilgi` & `/sunucu-bilgi` : Detaylı istatistikler.'
+              value: '• `/duyuru` : Efektli, temalı ve göz alıcı epik klan duyuruları yayınlar.\n• `/anket` : Canlı sayaçlı ve çift oy korumalı oylama başlatır.\n• `/cekilis` : Kazananları otomatik etiketleyen çekiliş sistemi.\n• `/reroll` : Çekilişten yeni kazanan seçer.\n• `/kullanici-bilgi` & `/sunucu-bilgi` : Detaylı istatistikler.'
             },
             {
               name: '🎫 Destek',
@@ -521,7 +538,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
       }
 
-      // 2. /sunucu-analiz (DETAYLI ANALİZ & OTOMATİK KURULUM BUTONU)
+      // 2. /sunucu-analiz
       if (commandName === 'sunucu-analiz') {
         await interaction.deferReply({ ephemeral: true });
 
@@ -690,7 +707,76 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 4. /haftanin-oyuncusu
+      // 4. /duyuru (GÖZ ALICI & HAVALI DUYURU)
+      if (commandName === 'duyuru') {
+        const channel = interaction.options.getChannel('kanal');
+        const title = interaction.options.getString('baslik');
+        const message = interaction.options.getString('mesaj');
+        const theme = interaction.options.getString('tema') || 'royal';
+        const imageUrl = interaction.options.getString('resim_url');
+        const pingEveryone = interaction.options.getBoolean('herkese_etiket') ?? false;
+
+        // Tema Ayarları (Renk, Emojiler, Rozetler)
+        let themeColor = '#8B5CF6';
+        let themeBadge = '👑 RESMİ KLAN DUYURUSU';
+        let themeIcon = '✦';
+
+        if (theme === 'war') {
+          themeColor = '#EF4444';
+          themeBadge = '⚔️ KRİTİK SAVAŞ & OPERASYON BİLDİRİSİ';
+          themeIcon = '🔥';
+        } else if (theme === 'cyber') {
+          themeColor = '#00F0FF';
+          themeBadge = '⚡ SİSTEM & ÖNEMLİ GÜNCELLEME';
+          themeIcon = '⚡';
+        } else if (theme === 'gold') {
+          themeColor = '#F59E0B';
+          themeBadge = '🏆 BÜYÜK TURNUVA & ÖDÜLLÜ ETKİNLİK';
+          themeIcon = '🌟';
+        } else if (theme === 'shield') {
+          themeColor = '#10B981';
+          themeBadge = '🛡️ GÜVENLİK & TOPLULUK KURALLARI';
+          themeIcon = '💠';
+        }
+
+        const formattedText = message.replace(/\\n/g, '\n');
+
+        const epicAnnouncementEmbed = new EmbedBuilder()
+          .setColor(themeColor)
+          .setAuthor({
+            name: `${interaction.guild.name} • ${themeBadge}`,
+            iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL()
+          })
+          .setTitle(`${themeIcon} 〖 ${title.toUpperCase()} 〗 ${themeIcon}`)
+          .setDescription(
+            `>>> ${formattedText}\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+          )
+          .addFields(
+            { name: '👑 Yetkili', value: `${interaction.user}`, inline: true },
+            { name: '🏷️ Kategori', value: `\`${themeBadge}\``, inline: true },
+            { name: '⏰ Yayın Zamanı', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true }
+          )
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        if (imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
+          epicAnnouncementEmbed.setImage(imageUrl);
+        }
+
+        const contentPing = pingEveryone
+          ? `📢 @everyone ⚡ **DİKKAT! YENİ RESMİ VYRON DUYURUSU YAYINLANDI!** ⚔️`
+          : undefined;
+
+        await channel.send({
+          content: contentPing,
+          embeds: [epicAnnouncementEmbed]
+        });
+
+        return interaction.reply({ content: `✅ Havalı ve efektli duyuru ${channel} kanalına başarıyla yayınlandı! 🚀`, ephemeral: true });
+      }
+
+      // 5. /haftanin-oyuncusu
       if (commandName === 'haftanin-oyuncusu') {
         const category = interaction.options.getString('kategori');
         const targetUser = interaction.options.getUser('oyuncu');
@@ -742,7 +828,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ ${member} kullanıcısına **${roleName}** unvanı verildi ve duyurusu geçildi!`, ephemeral: true });
       }
 
-      // 5. /scrim
+      // 6. /scrim
       if (commandName === 'scrim') {
         const requiredCount = parseInt(interaction.options.getString('format'));
         const desc = interaction.options.getString('aciklama') || 'Vyron klan içi antrenman / scrim karşılaşması.';
@@ -779,7 +865,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Scrim lobisi başlatıldı!`, ephemeral: true });
       }
 
-      // 6. /kilit
+      // 7. /kilit
       if (commandName === 'kilit') {
         const action = interaction.options.getString('durum');
         const targetChannel = interaction.options.getChannel('kanal') || interaction.channel;
@@ -808,7 +894,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 7. /klan-rutbe
+      // 8. /klan-rutbe
       if (commandName === 'klan-rutbe') {
         const targetUser = interaction.options.getUser('kullanici');
         const action = interaction.options.getString('islem');
@@ -834,7 +920,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 8. /ticket-kur
+      // 9. /ticket-kur
       if (commandName === 'ticket-kur') {
         const targetChannel = interaction.options.getChannel('kanal');
         const supportRole = interaction.options.getRole('yetkili_rol');
@@ -866,7 +952,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Genel Destek paneli kuruldu!`, ephemeral: true });
       }
 
-      // 9. /cekilis
+      // 10. /cekilis
       if (commandName === 'cekilis') {
         const durationStr = interaction.options.getString('sure');
         const prize = interaction.options.getString('odul');
@@ -979,7 +1065,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      // 10. /reroll
+      // 11. /reroll
       if (commandName === 'reroll') {
         const queryId = interaction.options.getString('cekilis_id');
         let targetGw = null;
@@ -1006,7 +1092,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Yeni kazanan belirlendi: <@${randomWinner}>`, ephemeral: true });
       }
 
-      // 11. /anket
+      // 12. /anket
       if (commandName === 'anket') {
         const question = interaction.options.getString('soru');
         const targetChannel = interaction.options.getChannel('kanal') || interaction.channel;
@@ -1043,7 +1129,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Canlı sayaçlı anket ${targetChannel} kanalında başlatıldı!`, ephemeral: true });
       }
 
-      // 12. /mute
+      // 13. /mute
       if (commandName === 'mute') {
         const targetUser = interaction.options.getUser('kullanici');
         const durationStr = interaction.options.getString('sure');
@@ -1080,7 +1166,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ ${member} kullanıcısı **${durationStr}** süreyle susturuldu. (Sebep: ${reason})` });
       }
 
-      // 13. /unmute
+      // 14. /unmute
       if (commandName === 'unmute') {
         const targetUser = interaction.options.getUser('kullanici');
         const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
@@ -1090,7 +1176,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ ${member} kullanıcısının susturması kaldırıldı.` });
       }
 
-      // 14. /kick
+      // 15. /kick
       if (commandName === 'kick') {
         const targetUser = interaction.options.getUser('kullanici');
         const reason = interaction.options.getString('sebep') || 'Sebep belirtilmedi.';
@@ -1119,7 +1205,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `👢 **${targetUser.tag}** sunucudan atıldı! (Sebep: ${reason})` });
       }
 
-      // 15. /ban
+      // 16. /ban
       if (commandName === 'ban') {
         const targetUser = interaction.options.getUser('kullanici');
         const reason = interaction.options.getString('sebep') || 'Sebep belirtilmedi.';
@@ -1144,28 +1230,6 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         return interaction.reply({ content: `🔨 **${targetUser.tag}** sunucudan yasaklandı! (Sebep: ${reason})` });
-      }
-
-      // 16. /duyuru
-      if (commandName === 'duyuru') {
-        const channel = interaction.options.getChannel('kanal');
-        const title = interaction.options.getString('baslik');
-        const message = interaction.options.getString('mesaj');
-        const pingEveryone = interaction.options.getBoolean('herkese_etiket') ?? false;
-
-        const announcementEmbed = new EmbedBuilder()
-          .setColor('#38BDF8')
-          .setTitle(`📢 ${title}`)
-          .setDescription(message.replace(/\\n/g, '\n'))
-          .setFooter({ text: FOOTER_TEXT })
-          .setTimestamp();
-
-        await channel.send({
-          content: pingEveryone ? '@everyone' : undefined,
-          embeds: [announcementEmbed]
-        });
-
-        return interaction.reply({ content: `✅ Duyuru ${channel} kanalına başarıyla gönderildi!`, ephemeral: true });
       }
 
       // 17. /kullanici-bilgi
@@ -1221,7 +1285,7 @@ client.on('interactionCreate', async (interaction) => {
         const verifyEmbed = new EmbedBuilder()
           .setColor('#10B981')
           .setTitle(`🛡️ ${interaction.guild.name} Doğrulama`)
-          .setDescription('Sunucumuza hoş geldiniz! Kanallara erişim sağlamak için aşağıdaki butona basınız.')
+          .setDescription('Sunucumuza hoş geldiniz! Kanallara tam erişim kazanmak için aşağıdaki butona basınız.')
           .setFooter({ text: FOOTER_TEXT });
 
         const verifyRow = new ActionRowBuilder().addComponents(
