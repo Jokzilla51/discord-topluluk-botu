@@ -74,10 +74,10 @@ const commands = [
     .setName('yardim')
     .setDescription('Vyron klan botunun tüm komutlarını ve sistem kılavuzunu gösterir.'),
 
-  // 2. /sunucu-analiz
+  // 2. /sunucu-analiz (Eksikleri bulan ve otomatik oluşturan akıllı sistem)
   new SlashCommandBuilder()
     .setName('sunucu-analiz')
-    .setDescription('Sunucuyu analiz eder, eksikleri raporlar ve tek tıkla otomatik kurma butonu sunar.')
+    .setDescription('Sunucuyu analiz eder, eksik kanalları/panelleri tespit edip tek tıkla otomatik kurar.')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   // 3. /basvuru-kur (Seçmeli Çoklu Yetkili Rol Desteği)
@@ -496,7 +496,7 @@ client.on('interactionCreate', async (interaction) => {
           .addFields(
             {
               name: '🔍 Sunucu Denetimi & Otomatik Kurulum',
-              value: '• `/sunucu-analiz` : Mevcut kanallarını analiz eder, eksikleri raporlar ve tek tıkla otomatik kurar.'
+              value: '• `/sunucu-analiz` : Mevcut kanallarını analiz eder, eksik kanalları ve panelleri tek tıkla kurar.'
             },
             {
               name: '⚔️ Klan & Alım Sistemleri',
@@ -521,7 +521,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
       }
 
-      // 2. /sunucu-analiz
+      // 2. /sunucu-analiz (DETAYLI ANALİZ & OTOMATİK KURULUM BUTONU)
       if (commandName === 'sunucu-analiz') {
         await interaction.deferReply({ ephemeral: true });
 
@@ -554,22 +554,28 @@ client.on('interactionCreate', async (interaction) => {
 
         const actionItems = [];
 
-        if (chApply && clanRole) {
-          actionItems.push(`• **Klan Başvuru:** \`#${chApply.name}\` mevcut. Panel kurulabilir.`);
+        if (chApply) {
+          actionItems.push(`• **Klan Başvuru Kanalı:** ${chApply} (Mevcut)`);
         } else {
-          actionItems.push('• ❌ **#klan-başvuru** veya **Klan Üye Rolü** eksik.');
+          actionItems.push('• ❌ **#klan-başvuru** kanalı yok (Otomatik oluşturulacak)');
         }
 
-        if (chVerify && memberRole) {
-          actionItems.push(`• **Doğrulama:** \`#${chVerify.name}\` mevcut. Panel kurulabilir.`);
+        if (chVerify) {
+          actionItems.push(`• **Doğrulama Kanalı:** ${chVerify} (Mevcut)`);
+        } else {
+          actionItems.push('• ❌ **#doğrulama** kanalı yok (Otomatik oluşturulacak)');
         }
 
-        if (chTicket && ticketStaffRole) {
-          actionItems.push(`• **Destek:** \`#${chTicket.name}\` mevcut. Panel kurulabilir.`);
+        if (chTicket) {
+          actionItems.push(`• **Destek Kanalı:** ${chTicket} (Mevcut)`);
+        } else {
+          actionItems.push('• ❌ **#destek-talebi** kanalı yok (Otomatik oluşturulacak)');
         }
 
-        if (!chPunishLog) {
-          actionItems.push('• ⚠️ **#ceza-kayıt-log** kanalı eksik.');
+        if (chPunishLog) {
+          actionItems.push(`• **Ceza Kayıt Log:** ${chPunishLog} (Mevcut)`);
+        } else {
+          actionItems.push('• ⚠️ **#ceza-kayıt-log** kanalı yok (Otomatik oluşturulacak)');
         }
 
         const totalMembers = guild.memberCount;
@@ -578,10 +584,10 @@ client.on('interactionCreate', async (interaction) => {
 
         const reportEmbed = new EmbedBuilder()
           .setColor('#8B5CF6')
-          .setTitle(`🛡️ ${guild.name} - Detaylı Sunucu & Güvenlik Analiz Raporu`)
+          .setTitle(`🛡️ ${guild.name} - Sunucu & Güvenlik Analiz Raporu`)
           .setDescription(
-            `Merhaba <@${interaction.user.id}>! Sunucunuzun mevcut kanalları, rolleri ve bot izinleri başarıyla tarandı.\n\n` +
-            `Aşağıdaki **"⚡ Eksikleri Otomatik Tamamla"** butonuna basarak tespit edilen tüm eksik panelleri ve kanalları anında tek tıkla kurabilirsiniz!`
+            `Merhaba <@${interaction.user.id}>! Sunucunuzun mevcut kanalları, rolleri ve bot izinleri tarandı.\n\n` +
+            `Aşağıdaki **"⚡ Eksikleri Otomatik Tamamla / Kur"** butonuna basarak eksik olan tüm kanalları otomatik açtırabilir ve panellerini anında kurdurabilirsiniz!`
           )
           .addFields(
             {
@@ -590,17 +596,17 @@ client.on('interactionCreate', async (interaction) => {
               inline: false
             },
             {
-              name: '🛡️ Rol Hiyerarşisi & Güvenlik',
+              name: '🛡️ Rol Hiyerarşisi Durumu',
               value: roleHierarchyWarnings.length > 0 ? roleHierarchyWarnings.join('\n') : '✅ **Mükemmel!** Botun rol yetkisi klan ve üye rollerinin üzerinde.',
               inline: false
             },
             {
-              name: '🔍 Tespit Edilen Mevcut Kanallar & Roller',
-              value: `• **Klan Başvuru:** ${chApply ? `✅ \`#${chApply.name}\`` : '❌ Yok'}\n• **Başvuru Log:** ${chApplyLog ? `✅ \`#${chApplyLog.name}\`` : '❌ Yok'}\n• **Doğrulama:** ${chVerify ? `✅ \`#${chVerify.name}\`` : '❌ Yok'}\n• **Destek:** ${chTicket ? `✅ \`#${chTicket.name}\`` : '❌ Yok'}\n• **Ceza Log:** ${chPunishLog ? `✅ \`#${chPunishLog.name}\`` : '❌ Yok'}\n• **Klan Üye Rolü:** ${clanRole ? `✅ \`@${clanRole.name}\`` : '❌ Yok'}\n• **Trapçi Rolü:** ${trapciRole ? `✅ \`@${trapciRole.name}\`` : '❌ Yok'}\n• **Elytracı Rolü:** ${elytraciRole ? `✅ \`@${elytraciRole.name}\`` : '❌ Yok'}`,
+              name: '🔍 Tespit Edilen Mevcut Kanallar',
+              value: `• **Klan Başvuru:** ${chApply ? `✅ ${chApply}` : '❌ Yok (Açılacak)'}\n• **Başvuru Log:** ${chApplyLog ? `✅ ${chApplyLog}` : '❌ Yok (Açılacak)'}\n• **Doğrulama:** ${chVerify ? `✅ ${chVerify}` : '❌ Yok (Açılacak)'}\n• **Destek:** ${chTicket ? `✅ ${chTicket}` : '❌ Yok (Açılacak)'}\n• **Ceza Log:** ${chPunishLog ? `✅ ${chPunishLog}` : '❌ Yok (Açılacak)'}`,
               inline: false
             },
             {
-              name: '🚀 Yapılabilecek Otomatik Kurulumlar',
+              name: '🚀 Otomatik Kurulacak Sistemler',
               value: actionItems.join('\n'),
               inline: false
             }
@@ -610,7 +616,7 @@ client.on('interactionCreate', async (interaction) => {
 
         const autoFixRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId('btn_autofix_missing_panels')
+            .setCustomId(`btn_autofix_missing_${guild.id}`)
             .setLabel('⚡ Eksikleri Otomatik Tamamla / Kur')
             .setStyle(ButtonStyle.Success)
             .setEmoji('🛠️')
@@ -619,7 +625,7 @@ client.on('interactionCreate', async (interaction) => {
         try {
           await interaction.user.send({ embeds: [reportEmbed], components: [autoFixRow] });
           return interaction.editReply({
-            content: `✅ **Sunucu analiz raporunuz hazırlandı ve DM kutunuza başarıyla gönderildi!** 📬 (DM içerisindeki yeşil butona basarak eksikleri tek tıkla kurabilirsiniz).`
+            content: `✅ **Sunucu analiz raporunuz hazırlandı ve DM kutunuza gönderildi!** 📬\n(DM kutunuzdaki yeşil butona basarak eksik kanalları ve panelleri tek tıkla kurabilirsiniz).`
           });
         } catch (dmErr) {
           return interaction.editReply({
@@ -630,7 +636,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 3. /basvuru-kur (SEÇİLEN ÇOKLU YETKİLİ ROLLERİ İLE KURULUM)
+      // 3. /basvuru-kur
       if (commandName === 'basvuru-kur') {
         const targetChannel = interaction.options.getChannel('kanal');
         const clanRole = interaction.options.getRole('klan_rolu');
@@ -1526,10 +1532,14 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `🗳️ ${userAction}`, ephemeral: true });
       }
 
-      // 2. OTOMATİK EKSİKLERİ TAMAMLAMA BUTONU
-      if (customId === 'btn_autofix_missing_panels') {
-        const guild = interaction.guild || client.guilds.cache.first();
-        if (!guild) return interaction.reply({ content: '❌ Sunucu bulunamadı!', ephemeral: true });
+      // 2. OTOMATİK EKSİK KANALLARI OLUŞTURMA VE PANELLERİ KURMA BUTONU
+      if (customId.startsWith('btn_autofix_missing_')) {
+        const guildId = customId.replace('btn_autofix_missing_', '');
+        const guild = client.guilds.cache.get(guildId) || interaction.guild || client.guilds.cache.first();
+
+        if (!guild) {
+          return interaction.reply({ content: '❌ Sunucu bulunamadı!', ephemeral: true });
+        }
 
         const member = await guild.members.fetch(interaction.user.id).catch(() => null);
         if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -1541,30 +1551,53 @@ client.on('interactionCreate', async (interaction) => {
         const roles = guild.roles.cache;
         const channels = guild.channels.cache;
 
-        const clanRole = roles.find(r => r.name.toLowerCase().includes('klan üye') && !r.name.toLowerCase().includes('has'));
+        const clanRole = roles.find(r => r.name.toLowerCase().includes('klan üye') && !r.name.toLowerCase().includes('has')) || roles.find(r => r.name.toLowerCase().includes('klan'));
         const memberRole = roles.find(r => r.name.toLowerCase().includes('vyron • üye') || (r.name.toLowerCase().includes('üye') && !r.name.toLowerCase().includes('klan')));
-        const ticketStaffRole = roles.find(r => r.name.toLowerCase().includes('ticket') || r.name.toLowerCase().includes('destek'));
-
-        const chApply = channels.find(c => c.name.includes('klan-başvuru') || c.name.includes('basvuru'));
-        const chApplyLog = channels.find(c => c.name.includes('başvuru-log') || c.name.includes('basvuru-log'));
-        const chVerify = channels.find(c => c.name.includes('doğrulama') || c.name.includes('dogrulama') || c.name.includes('kayıt') || c.name.includes('giris'));
-        const chTicket = channels.find(c => c.name.includes('destek') || c.name.includes('ticket'));
+        const ticketStaffRole = roles.find(r => r.name.toLowerCase().includes('ticket') || r.name.toLowerCase().includes('destek') || r.name.toLowerCase().includes('admin') || r.name.toLowerCase().includes('mod'));
 
         const results = [];
+
+        // 1. #klan-başvuru & #başvuru-log
+        let chApply = channels.find(c => c.name.includes('klan-başvuru') || c.name.includes('basvuru'));
+        if (!chApply) {
+          chApply = await guild.channels.create({
+            name: 'klan-başvuru',
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              { id: guild.roles.everyone.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory], deny: [PermissionFlagsBits.SendMessages] },
+              { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
+            ]
+          });
+          results.push(`📁 **#klan-başvuru** kanalı oluşturuldu: ${chApply}`);
+        }
+
+        let chApplyLog = channels.find(c => c.name.includes('başvuru-log') || c.name.includes('basvuru-log'));
+        if (!chApplyLog) {
+          chApplyLog = await guild.channels.create({
+            name: 'başvuru-log',
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+              { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+              { id: member.roles.highest.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+            ]
+          });
+          results.push(`🔒 **#başvuru-log** kanalı oluşturuldu: ${chApplyLog}`);
+        }
 
         if (chApply && clanRole) {
           const configKey = `applycfg_${Date.now()}`;
           applyConfigs.set(configKey, {
             clanRoleId: clanRole.id,
             staffRoleIds: [member.roles.highest.id],
-            logChannelId: chApplyLog ? chApplyLog.id : null,
+            logChannelId: chApplyLog.id,
             categoryId: null
           });
 
           const applyEmbed = new EmbedBuilder()
             .setColor('#8B5CF6')
             .setTitle(`⚔️ ${guild.name} - Klan Başvuru Paneli`)
-            .setDescription(`Vyron klanına katılmak için aşağıdaki butona basarak formu doldurunuz. Başvurunuz gönderilince adınıza özel başvuru ticket odası açılacaktır.`)
+            .setDescription(`Vyron klanımıza katılmak için aşağıdaki butona basarak formu doldurunuz. Başvurunuz gönderilince adınıza özel başvuru ticket odası açılacaktır.\n\n👇 Başvurmak için butona basınız.`)
             .setFooter({ text: FOOTER_TEXT });
 
           const applyRow = new ActionRowBuilder().addComponents(
@@ -1574,15 +1607,30 @@ client.on('interactionCreate', async (interaction) => {
               .setStyle(ButtonStyle.Primary)
               .setEmoji('📝')
           );
+
           await chApply.send({ embeds: [applyEmbed], components: [applyRow] });
-          results.push(`✅ **Klan Başvuru Paneli** #${chApply.name} kanalına kuruldu.`);
+          results.push(`✅ **Klan Başvuru Paneli** kuruldu: ${chApply}`);
+        }
+
+        // 2. #doğrulama
+        let chVerify = channels.find(c => c.name.includes('doğrulama') || c.name.includes('dogrulama') || c.name.includes('kayıt') || c.name.includes('giris'));
+        if (!chVerify) {
+          chVerify = await guild.channels.create({
+            name: 'doğrulama',
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              { id: guild.roles.everyone.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory], deny: [PermissionFlagsBits.SendMessages] },
+              { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
+            ]
+          });
+          results.push(`📁 **#doğrulama** kanalı oluşturuldu: ${chVerify}`);
         }
 
         if (chVerify && memberRole) {
           const verifyEmbed = new EmbedBuilder()
             .setColor('#10B981')
             .setTitle(`🛡️ ${guild.name} Doğrulama`)
-            .setDescription('Sunucuya tam erişim kazanmak için aşağıdaki butona basınız.')
+            .setDescription('Sunucumuza hoş geldiniz! Kanallara tam erişim kazanmak için aşağıdaki butona basınız.')
             .setFooter({ text: FOOTER_TEXT });
 
           const verifyRow = new ActionRowBuilder().addComponents(
@@ -1591,15 +1639,30 @@ client.on('interactionCreate', async (interaction) => {
               .setLabel('✅ Doğrula ve Giriş Yap')
               .setStyle(ButtonStyle.Success)
           );
+
           await chVerify.send({ embeds: [verifyEmbed], components: [verifyRow] });
-          results.push(`✅ **Doğrulama Paneli** #${chVerify.name} kanalına kuruldu.`);
+          results.push(`✅ **Doğrulama Paneli** kuruldu: ${chVerify}`);
+        }
+
+        // 3. #destek-talebi
+        let chTicket = channels.find(c => c.name.includes('destek') || c.name.includes('ticket'));
+        if (!chTicket) {
+          chTicket = await guild.channels.create({
+            name: 'destek-talebi',
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              { id: guild.roles.everyone.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory], deny: [PermissionFlagsBits.SendMessages] },
+              { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
+            ]
+          });
+          results.push(`📁 **#destek-talebi** kanalı oluşturuldu: ${chTicket}`);
         }
 
         if (chTicket && ticketStaffRole) {
           const ticketEmbed = new EmbedBuilder()
             .setColor('#3B82F6')
             .setTitle(`📩 ${guild.name} - Destek & Şikayet Paneli`)
-            .setDescription('Sunucuyla ilgili sorularınız ve şikayetleriniz için yetkililerle özel destek odası açabilirsiniz.')
+            .setDescription('Sunucuyla ilgili sorularınız, önerileriniz veya şikayetleriniz için yetkililerle özel destek odası açabilirsiniz.\n\n*(⚠️ Not: Klan başvurusu yapacaksanız lütfen klan başvuru kanalını kullanınız).*')
             .setFooter({ text: FOOTER_TEXT });
 
           const ticketRow = new ActionRowBuilder().addComponents(
@@ -1609,13 +1672,34 @@ client.on('interactionCreate', async (interaction) => {
               .setStyle(ButtonStyle.Primary)
               .setEmoji('🎫')
           );
+
           await chTicket.send({ embeds: [ticketEmbed], components: [ticketRow] });
-          results.push(`✅ **Destek Paneli** #${chTicket.name} kanalına kuruldu.`);
+          results.push(`✅ **Destek Paneli** kuruldu: ${chTicket}`);
         }
 
-        return interaction.editReply({
-          content: `🎉 **Otomatik Kurulum Tamamlandı!**\n\n${results.length > 0 ? results.join('\n') : 'Kurulacak eksik kanal bulunamadı.'}`
-        });
+        // 4. #ceza-kayıt-log
+        let chPunishLog = channels.find(c => c.name.includes('ceza-kayıt') || c.name.includes('ceza-log') || c.name.includes('moderasyon-log'));
+        if (!chPunishLog) {
+          chPunishLog = await guild.channels.create({
+            name: 'ceza-kayıt-log',
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+              { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+              { id: member.roles.highest.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+            ]
+          });
+          results.push(`🔒 **#ceza-kayıt-log** kanalı oluşturuldu: ${chPunishLog}`);
+        }
+
+        const completionEmbed = new EmbedBuilder()
+          .setColor('#10B981')
+          .setTitle('🎉 Sunucu Eksikleri Otomatik Olarak Kuruldu!')
+          .setDescription(`Bot sunucundaki eksik kanalları oluşturdu ve panelleri yerleştirdi:\n\n${results.join('\n\n')}`)
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        return interaction.editReply({ embeds: [completionEmbed] });
       }
 
       // 3. ANYDESK KONTROLE ÇAĞIR BUTONU
@@ -1675,7 +1759,6 @@ client.on('interactionCreate', async (interaction) => {
               content: `🎉 **Tebrikler ${applicant.user.username}!** Vyron klanımızın Anydesk kontrolünden başarıyla geçtiniz ve **${clanRole.name}** rolünüz tanımlandı. Klana hoş geldiniz! ⚔️`
             });
           } catch (e) {}
-          // Kanal duyurusu kullanıcı isteğiyle kaldırıldı, sadece DM atılıyor.
         }
 
         const passEmbed = new EmbedBuilder()
