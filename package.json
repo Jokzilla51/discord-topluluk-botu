@@ -1,7 +1,7 @@
 {
   "name": "discord-allinone-bot",
   "version": "1.0.0",
-  "description": "Ticket, Çekiliş ve Doğrulama özelliklerine sahip Render uyumlu Discord Botu",
+  "description": "Vyron Klan & Topluluk Botu",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -13,7 +13,7 @@
     "verification",
     "render"
   ],
-  "author": "",
+  "author": "profosyonel456",
   "license": "MIT",
   "dependencies": {
     "discord.js": "^14.16.3",
