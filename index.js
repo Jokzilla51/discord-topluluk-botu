@@ -20,7 +20,12 @@ const express = require('express');
 const ms = require('ms');
 const fs = require('fs');
 const path = require('path');
-const Tesseract = require('tesseract.js');
+let Tesseract = null;
+try {
+  Tesseract = require('tesseract.js');
+} catch (e) {
+  console.warn('⚠️ [BİLGİ] tesseract.js henüz yüklenmemiş. GitHub üzerinde package.json dosyasını güncelleyiniz.');
+}
 require('dotenv').config();
 
 // Sabit Marka İmzası (Footer)
@@ -126,6 +131,15 @@ let applicationCounter = 1;
 // YouTube Ekran Görüntüsünü (PNG/JPG) Otomatik Okuyan Çok Dilli Yapay Zeka / OCR Motoru
 async function analyzeYoutubeScreenshot(imageUrl) {
   try {
+    if (!Tesseract) {
+      try {
+        Tesseract = require('tesseract.js');
+      } catch (err) {
+        console.error('Tesseract modülü bulunamadı. Lütfen GitHub package.json güncelleyiniz.');
+        return { isValid: false, error: 'Tesseract modülü eksik', matchedSubs: [], matchedChannels: [] };
+      }
+    }
+
     const result = await Tesseract.recognize(imageUrl, 'eng', {
       logger: () => {}
     });
