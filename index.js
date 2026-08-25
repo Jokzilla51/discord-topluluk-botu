@@ -49,11 +49,7 @@ function loadData() {
         ticketCategoryId: parsed.ticketCategoryId || null,
         clanRoleId: parsed.clanRoleId || null,
         aboneRoleId: parsed.aboneRoleId || null,
-        aboneLogChannelId: parsed.aboneLogChannelId || null,
-        staffStats: parsed.staffStats || {},
-        staffLeaderboardChannelId: parsed.staffLeaderboardChannelId || null,
-        staffLeaderboardMessageId: parsed.staffLeaderboardMessageId || null,
-        lastDailyResetDate: parsed.lastDailyResetDate || ''
+        aboneLogChannelId: parsed.aboneLogChannelId || null
       };
     }
   } catch (e) {
@@ -67,11 +63,7 @@ function loadData() {
     ticketCategoryId: null,
     clanRoleId: null,
     aboneRoleId: null,
-    aboneLogChannelId: null,
-    staffStats: {},
-    staffLeaderboardChannelId: null,
-    staffLeaderboardMessageId: null,
-    lastDailyResetDate: ''
+    aboneLogChannelId: null
   };
 }
 
@@ -116,14 +108,13 @@ app.listen(PORT, () => {
 
 // ==========================================
 // 2. DISCORD CLIENT & BELLEK HAVUZLARI
-// (Kanala atılan SS'leri yakalamak için MessageContent, ses takibi için GuildVoiceStates aktif)
+// (Kanala atılan SS'leri yakalamak için MessageContent intenti aktif)
 // ==========================================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -132,82 +123,22 @@ const activeScrims = new Map();
 const activePolls = new Map();
 const activeEvents = new Map();
 const userSubProgress = new Map();
-const activeClaimedTickets = new Map();
 let applicationCounter = 1;
 
 // ==========================================
 // YARDIMCI FONKSİYONLAR: YAPAY ZEKA / OCR GÖRSEL ANALİZİ
 // ==========================================
 
-// Görselin Gerçek Boyutlarını (Genişlik & Yükseklik) Doğrulayan Fonksiyon
-async function getImageDimensions(attachment) {
-  let w = attachment.width || 0;
-  let h = attachment.height || 0;
-
-  if (w > 0 && h > 0) return { width: w, height: h };
-
-  try {
-    const res = await fetch(attachment.url);
-    const buffer = Buffer.from(await res.arrayBuffer());
-
-    // 1. PNG Boyut Okuma (Bytes 16..24)
-    if (buffer.length >= 24 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
-      w = buffer.readUInt32BE(16);
-      h = buffer.readUInt32BE(20);
-      return { width: w, height: h };
-    }
-
-    // 2. JPEG / JPG Boyut Okuma
-    if (buffer.length >= 8 && buffer[0] === 0xFF && buffer[1] === 0xD8) {
-      let offset = 2;
-      while (offset < buffer.length - 8) {
-        if (buffer[offset] === 0xFF && (buffer[offset + 1] === 0xC0 || buffer[offset + 1] === 0xC2)) {
-          h = buffer.readUInt16BE(offset + 5);
-          w = buffer.readUInt16BE(offset + 7);
-          return { width: w, height: h };
-        }
-        offset++;
-      }
-    }
-  } catch (e) {
-    console.error('Görsel boyut okuma hatası:', e);
-  }
-
-  return { width: w, height: h };
-}
-
-// Tam Ekran Çözünürlük & Oran Kontrolü (1080p ve Orijinal Ekran Şartı)
-function isImageFullScreen(width, height) {
+// Kırpılmış Ekran Görüntüsü Tespit Edici (Anti-Crop)
+function isImageCropped(width, height) {
   if (!width || !height) return false;
-
-  // 1. Bilgisayar / Monitör Ekranı (Genişlik >= Yükseklik)
-  if (width >= height) {
-    // Bilgisayarda en az 1080px genişlik VE en az 650px yükseklik şartı!
-    if (width < 1080 || height < 650) {
-      return false; // Kırpılmış!
-    }
-    const ratio = width / height;
-    // Standart monitör oranları (16:9 = 1.77, 16:10 = 1.6, 21:9 = 2.33, 4:3 = 1.33)
-    if (ratio < 1.25 || ratio > 2.45) {
-      return false; // Kırpılmış şerit!
-    }
-    return true;
-  }
-
-  // 2. Telefon / Mobil Ekranı (Yükseklik > Genişlik)
-  if (height > width) {
-    // Telefonda en az 1080px yükseklik VE en az 550px genişlik şartı!
-    if (height < 1080 || width < 550) {
-      return false; // Kırpılmış!
-    }
-    const ratio = height / width;
-    // Standart telefon ekran oranları (16:9, 18:9, 19.5:9, 20:9, 21:9)
-    if (ratio < 1.45 || ratio > 2.45) {
-      return false; // Kırpılmış!
-    }
-    return true;
-  }
-
+  const ratio = width / height;
+  // Yatayda kırpılmış dar şerit / banner (Örn: 1200x200):
+  if (ratio > 2.15) return true;
+  // Dikeyde aşırı kırpılmış parça:
+  if (ratio < 0.35) return true;
+  // Çok küçük kırpılmış parça / ikon:
+  if (width < 450 || height < 400) return true;
   return false;
 }
 
@@ -450,315 +381,6 @@ async function getOrCreateCheatLogChannel(guild) {
   }
 }
 
-// 7. Yetkili / Yönetici Kontrolü
-function isStaffMember(member, data) {
-  if (!member || !member.roles) return false;
-  if (member.permissions.has(PermissionFlagsBits.Administrator) ||
-      member.permissions.has(PermissionFlagsBits.ManageGuild) ||
-      member.permissions.has(PermissionFlagsBits.ManageRoles) ||
-      member.permissions.has(PermissionFlagsBits.ModerateMembers)) return true;
-
-  const allStaffRoles = [
-    ...(data?.staffRoleIds || []),
-    ...(data?.ticketStaffRoleIds || []),
-    ...(data?.aboneStaffRoleIds || [])
-  ];
-  return member.roles.cache.some(r => allStaffRoles.includes(r.id) || r.name.toLowerCase().includes('yetkili') || r.name.toLowerCase().includes('mod') || r.name.toLowerCase().includes('admin'));
-}
-
-// Süre Biçimlendirme (Saat & Dakika)
-function formatDuration(ms) {
-  if (!ms || ms <= 0) return '0 Dk';
-  const totalMinutes = Math.floor(ms / (1000 * 60));
-  const hours = Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
-  if (hours === 0) return `${mins} Dk`;
-  return `${hours} Saat ${mins} Dk`;
-}
-
-// Yetkili Mesai Sisteminin Canlı Olup Olmadığını Kontrol Eden Fonksiyon (Yarın Sabah 09:00'a Kadar Bekler)
-function isStaffTrackingLive() {
-  const now = new Date();
-  const turkeyDate = new Date(now.getTime() + (3 * 60 * 60 * 1000));
-  const year = turkeyDate.getUTCFullYear();
-  const month = String(turkeyDate.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(turkeyDate.getUTCDate()).padStart(2, '0');
-  const hour = turkeyDate.getUTCHours();
-  const dateStr = `${year}-${month}-${day}`;
-
-  // 26 Ağustos 2026 saat 09:00'dan önce başlatma (Yarın sabah 09:00'da başlar)
-  if (dateStr < '2026-08-26') return false;
-  if (dateStr === '2026-08-26' && hour < 9) return false;
-  return true;
-}
-
-// 8. #yetkili-sıralaması Kanalı (Yalnızca kaydedilen veya mevcut kanalı kullanır, kafasına göre yeni kanal oluşturmaz)
-async function getOrCreateStaffLeaderboardChannel(guild) {
-  try {
-    const data = loadData();
-    if (data.staffLeaderboardChannelId) {
-      const savedCh = guild.channels.cache.get(data.staffLeaderboardChannelId);
-      if (savedCh) return savedCh;
-    }
-
-    const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
-    const ch = channels.find(c =>
-      c && c.type === ChannelType.GuildText &&
-      (c.name.includes('yetkili-siralama') || c.name.includes('yetkili-mesai') || c.name.includes('yetkili-tablo') || c.name.includes('mesai-takip'))
-    );
-
-    if (ch) {
-      data.staffLeaderboardChannelId = ch.id;
-      saveData(data);
-      return ch;
-    }
-
-    return null;
-  } catch (err) {
-    console.error('Yetkili sıralama kanalı bulma hatası:', err);
-    return null;
-  }
-}
-
-// 9. Canlı Sıralama Tablosunu Güncelle (Komutsuz & Otomatik)
-async function updateStaffLeaderboard(guild) {
-  try {
-    const data = loadData();
-    if (!data.staffStats) data.staffStats = {};
-
-    const ch = await getOrCreateStaffLeaderboardChannel(guild);
-    if (!ch) return; // Kanal yoksa kafasına göre oluşturma, /yetkili-siralama-kur ile kurulsun
-
-    // Eğer yarın sabah 09:00'dan önce ise geri sayım paneli göster
-    if (!isStaffTrackingLive()) {
-      const preEmbed = new EmbedBuilder()
-        .setColor('#8B5CF6')
-        .setAuthor({ name: 'Vyron Klan Yönetimi • Canlı Yetkili Mesai & Sıralama', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-        .setTitle('👑 GÜNLÜK YETKİLİ MESAİ & LİDERLİK TABLOSU')
-        .setDescription(
-          `📌 **Mesai Saatleri:** \`09:00 - 00:00 (Gece 12)\`\n` +
-          `⏱️ **Vardiya Durumu:** ⏳ **Resmi Başlangıç: Yarın Sabah 09:00**\n\n` +
-          `*Yetkili mesai ve liderlik sistemi yarın sabah 09:00'da resmi olarak başlayacaktır. Tüm yetkililer eşit ve sıfır puanla başlayacaktır.*\n\n` +
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-          `>>> ℹ️ *Sistem yarın sabah 09:00'da canlı takibe başlayacaktır.*`
-        )
-        .setFooter({ text: `${FOOTER_TEXT} • Otomatik Canlı Tablo` })
-        .setTimestamp();
-
-      let msg = null;
-      if (data.staffLeaderboardMessageId) {
-        msg = await ch.messages.fetch(data.staffLeaderboardMessageId).catch(() => null);
-      }
-      if (msg) {
-        await msg.edit({ embeds: [preEmbed], components: [] }).catch(() => {});
-      } else {
-        const newMsg = await ch.send({ embeds: [preEmbed], components: [] }).catch(() => {});
-        if (newMsg) {
-          data.staffLeaderboardMessageId = newMsg.id;
-          data.staffLeaderboardChannelId = ch.id;
-          saveData(data);
-        }
-      }
-      return;
-    }
-
-    const now = new Date();
-    const turkeyHour = (now.getUTCHours() + 3) % 24;
-    const isShiftActive = turkeyHour >= 9 && turkeyHour < 24;
-
-    const staffList = [];
-    const members = await guild.members.fetch().catch(() => guild.members.cache);
-
-    for (const [userId, member] of members) {
-      if (member.user.bot) continue;
-      const isStaff = isStaffMember(member, data);
-      const hasStats = data.staffStats[userId] !== undefined;
-
-      if (!isStaff && !hasStats) continue;
-
-      const userStats = data.staffStats[userId] || {
-        todayVoice: 0,
-        totalVoice: 0,
-        todayTicketMsgs: 0,
-        totalTicketMsgs: 0,
-        todayClaimed: 0,
-        totalClaimed: 0,
-        todayTickets: 0,
-        totalTickets: 0,
-        voiceJoinedAt: null
-      };
-
-      let liveVoiceTime = userStats.todayVoice || 0;
-      let isCurrentlyInVoice = false;
-
-      if (member.voice && member.voice.channelId && member.voice.channelId !== guild.afkChannelId) {
-        isCurrentlyInVoice = true;
-        if (userStats.voiceJoinedAt) {
-          liveVoiceTime += (Date.now() - userStats.voiceJoinedAt);
-        }
-      }
-
-      // Puan Formülü: 1 dk seste = 2p, 1 üstlenilen talep = 20p, 1 çözülen talep = 25p, 1 ticket mesajı = 2p
-      const score = Math.floor(liveVoiceTime / 60000) * 2 +
-                    (userStats.todayClaimed || 0) * 20 +
-                    (userStats.todayTickets || 0) * 25 +
-                    (userStats.todayTicketMsgs || 0) * 2;
-
-      staffList.push({
-        member,
-        userId,
-        todayVoice: liveVoiceTime,
-        totalVoice: (userStats.totalVoice || 0) + (liveVoiceTime - (userStats.todayVoice || 0)),
-        todayTicketMsgs: userStats.todayTicketMsgs || 0,
-        todayClaimed: userStats.todayClaimed || 0,
-        todayTickets: userStats.todayTickets || 0,
-        score,
-        isCurrentlyInVoice
-      });
-    }
-
-    // Puana ve seste kalma süresine göre sırala
-    staffList.sort((a, b) => b.score - a.score || b.todayVoice - a.todayVoice);
-
-    const rankIcons = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
-    let rankText = '';
-
-    if (staffList.length === 0) {
-      rankText = '>>> ℹ️ *Henüz mesai yapan veya seste aktif olan bir yetkili bulunmuyor.*';
-    } else {
-      staffList.slice(0, 15).forEach((item, idx) => {
-        const icon = rankIcons[idx] || `\`#${idx + 1}\``;
-        const voiceStatus = item.isCurrentlyInVoice ? '🟢 **Seste**' : '⚪ **Boşta**';
-        rankText += `${icon} **${item.member.displayName}** (${item.member})\n` +
-          `🎙️ **Seste:** \`${formatDuration(item.todayVoice)}\` (${voiceStatus})\n` +
-          `✋ **Üstlenen:** \`${item.todayClaimed} talep\` • 💬 **Destek Mesajı:** \`${item.todayTicketMsgs} adet\` • ✅ **Çözülen:** \`${item.todayTickets} adet\`\n` +
-          `⭐ **Performans Puanı:** \`${item.score} Puan\`\n\n`;
-      });
-    }
-
-    const leaderboardEmbed = new EmbedBuilder()
-      .setColor('#8B5CF6')
-      .setAuthor({ name: 'Vyron Klan Yönetimi • Canlı Yetkili Mesai & Sıralama', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-      .setTitle('👑 GÜNLÜK YETKİLİ MESAİ & LİDERLİK TABLOSU')
-      .setDescription(
-        `📌 **Mesai Saatleri:** \`09:00 - 00:00 (Gece 12)\`\n` +
-        `⏱️ **Vardiya Durumu:** ${isShiftActive ? '🟢 **Aktif Mesai (Saat 09:00 - 00:00)**' : '🌙 **Gece Dinlenme Aralığı (00:00 - 09:00)**'}\n\n` +
-        `*Yetkililerin ses süreleri, üstlendikleri talepler, ticket mesajları ve çözümleri **komutsuz olarak 7/24 otomatik** hesaplanır ve canlı güncellenir.*\n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        rankText
-      )
-      .setFooter({ text: `${FOOTER_TEXT} • Otomatik Canlı Tablo` })
-      .setTimestamp();
-
-    let msg = null;
-    if (data.staffLeaderboardMessageId) {
-      msg = await ch.messages.fetch(data.staffLeaderboardMessageId).catch(() => null);
-    }
-
-    if (msg) {
-      await msg.edit({ embeds: [leaderboardEmbed], components: [] }).catch(() => {});
-    } else {
-      const newMsg = await ch.send({ embeds: [leaderboardEmbed], components: [] }).catch(() => {});
-      if (newMsg) {
-        data.staffLeaderboardMessageId = newMsg.id;
-        data.staffLeaderboardChannelId = ch.id;
-        saveData(data);
-      }
-    }
-  } catch (err) {
-    console.error('Sıralama tablosu güncelleme hatası:', err);
-  }
-}
-
-// 10. Gece 00:00 Otomatik Kapanış & GÜNÜN İLK 10 YETKİLİSİ RAPORU
-async function checkNightlyShiftReset() {
-  try {
-    if (!isStaffTrackingLive()) return; // Yarın sabah 09:00'dan önce çalışmaz
-
-    const now = new Date();
-    const turkeyHour = (now.getUTCHours() + 3) % 24;
-    const todayStr = `${now.getUTCFullYear()}-${now.getUTCMonth() + 1}-${now.getUTCDate()}`;
-
-    const data = loadData();
-    if (!data.staffStats) data.staffStats = {};
-
-    // Gece 00:00 olduğunda ve bugün henüz kapanış yapılmadıysa
-    if (turkeyHour === 0 && data.lastDailyResetDate !== todayStr) {
-      data.lastDailyResetDate = todayStr;
-
-      const guilds = client.guilds.cache;
-      for (const [_, guild] of guilds) {
-        const ch = await getOrCreateStaffLeaderboardChannel(guild);
-        if (ch) {
-          const staffRanking = [];
-
-          for (const [userId, stats] of Object.entries(data.staffStats || {})) {
-            const score = Math.floor((stats.todayVoice || 0) / 60000) * 2 +
-                          (stats.todayClaimed || 0) * 20 +
-                          (stats.todayTickets || 0) * 25 +
-                          (stats.todayTicketMsgs || 0) * 2;
-
-            if (score > 0 || (stats.todayVoice || 0) > 0 || (stats.todayClaimed || 0) > 0) {
-              staffRanking.push({ userId, stats, score });
-            }
-          }
-
-          staffRanking.sort((a, b) => b.score - a.score || (b.stats.todayVoice || 0) - (a.stats.todayVoice || 0));
-
-          if (staffRanking.length > 0) {
-            const rankIcons = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
-            let top10Text = '';
-
-            staffRanking.slice(0, 10).forEach((item, index) => {
-              const icon = rankIcons[index] || `\`#${index + 1}\``;
-              top10Text += `${icon} **${index + 1}. <@${item.userId}>**\n` +
-                `🎙️ Seste: \`${formatDuration(item.stats.todayVoice)}\` • ✋ Üstlenen: \`${item.stats.todayClaimed || 0}\` • 💬 Destek Mesajı: \`${item.stats.todayTicketMsgs || 0}\` • ⭐ **${item.score} Puan**\n\n`;
-            });
-
-            const topStaff = staffRanking[0];
-
-            const nightEmbed = new EmbedBuilder()
-              .setColor('#10B981')
-              .setAuthor({ name: 'Vyron Klan Yönetimi • Gece Kapanış Raporu', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-              .setTitle('🌙 GÜNÜN MESAİSİ TAMAMLANDI & İLK 10 YETKİLİ!')
-              .setDescription(
-                `Bugünün mesaisi saat **00:00** itibarıyla tamamlandı!\n\n` +
-                `🏆 **GÜNÜN 1.'Sİ (EN ÇALIŞKAN):** <@${topStaff.userId}> (\`${topStaff.score} Puan\`)\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `### 👑 GÜNÜN İLK 10 YETKİLİSİ:\n\n` +
-                top10Text +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `📌 *10'dan sonraki diğer yetkililerin detaylı karnelerine \`/yetkili-rapor yetkili:@isim\` komutuyla bakabilirsiniz.*\n` +
-                `Tüm ekibimize emekleri için teşekkür ederiz! Yarın sabah 09:00'da yeni vardiya başlayacaktır. ⚔️💎`
-              )
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp();
-
-            await ch.send({ content: `📢 @everyone 🌙 **GÜNÜN İLK 10 YETKİLİ MESAİ RAPORU!**`, embeds: [nightEmbed] }).catch(() => {});
-          }
-        }
-
-        // Günlük sayaçları toplam hafızaya aktar ve günlükleri sıfırla
-        for (const [userId, stats] of Object.entries(data.staffStats || {})) {
-          stats.totalVoice = (stats.totalVoice || 0) + (stats.todayVoice || 0);
-          stats.totalTicketMsgs = (stats.totalTicketMsgs || 0) + (stats.todayTicketMsgs || 0);
-          stats.totalClaimed = (stats.totalClaimed || 0) + (stats.todayClaimed || 0);
-          stats.totalTickets = (stats.totalTickets || 0) + (stats.todayTickets || 0);
-          stats.todayVoice = 0;
-          stats.todayTicketMsgs = 0;
-          stats.todayClaimed = 0;
-          stats.todayTickets = 0;
-        }
-
-        saveData(data);
-        await updateStaffLeaderboard(guild);
-      }
-    }
-  } catch (e) {
-    console.error('Gece sıfırlama hatası:', e);
-  }
-}
-
 // ==========================================
 // 3. GELİŞMİŞ SLASH KOMUTLARI
 // ==========================================
@@ -801,35 +423,6 @@ const commands = [
         .setDescription('Abone SS atılacak kanal')
         .setRequired(true)
         .addChannelTypes(ChannelType.GuildText)
-    ),
-
-  // 5. /yetkili-siralama (CANLI LİDERLİK TABLOSU)
-  new SlashCommandBuilder()
-    .setName('yetkili-siralama')
-    .setDescription('Yetkili canlı mesai ve aktivite sıralama tablosunu yeniler ve gösterir.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  // 6. /yetkili-siralama-kur (SIRALAMA PANELİNİ İSTENEN KANALA KUR)
-  new SlashCommandBuilder()
-    .setName('yetkili-siralama-kur')
-    .setDescription('Yetkili canlı mesai ve aktivite panosunu seçilen kanala kurar.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addChannelOption(option =>
-      option.setName('kanal')
-        .setDescription('Panonun kurulacağı kanal (Örn: #yetkili-sıralaması)')
-        .setRequired(true)
-        .addChannelTypes(ChannelType.GuildText)
-    ),
-
-  // 7. /yetkili-rapor (DETAYLI YETKİLİ KARNESİ)
-  new SlashCommandBuilder()
-    .setName('yetkili-rapor')
-    .setDescription('Seçilen yetkilinin (veya genel ekibin) günlük ve toplam mesai karnesini gösterir.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addUserOption(option =>
-      option.setName('yetkili')
-        .setDescription('Raporu görüntülenecek yetkili (Boş bırakılırsa genel özet çıkar)')
-        .setRequired(false)
     ),
 
   // 5. /basvuru-yetkili
@@ -1336,22 +929,6 @@ client.once('ready', async () => {
       Routes.applicationCommands(client.user.id),
       { body: commands.map(cmd => cmd.toJSON()) }
     );
-
-    // Yetkili Canlı Sıralama & Mesai Takipçisi (Her 3 dakikada bir canlı günceller & Gece 00:00'da raporlar)
-    setTimeout(async () => {
-      const guilds = client.guilds.cache;
-      for (const [_, guild] of guilds) {
-        await updateStaffLeaderboard(guild).catch(() => {});
-      }
-    }, 10000);
-
-    setInterval(async () => {
-      const guilds = client.guilds.cache;
-      for (const [_, guild] of guilds) {
-        await updateStaffLeaderboard(guild).catch(() => {});
-      }
-      await checkNightlyShiftReset().catch(() => {});
-    }, 3 * 60 * 1000);
   } catch (error) {
     console.error('❌ Komut kaydı hatası:', error);
   }
@@ -1370,140 +947,18 @@ client.on('guildCreate', async (guild) => {
 });
 
 // ==========================================
-// 4.1. YETKİLİ SES DURUMU VE MESAİ TAKİPÇİSİ (VOICE STATE UPDATE)
-// (Yetkililerin seste durduğu süreyi komutsuz olarak 7/24 otomatik hesaplar)
-// ==========================================
-client.on('voiceStateUpdate', async (oldState, newState) => {
-  try {
-    if (!isStaffTrackingLive()) return; // Yarın sabah 09:00'a kadar ses takibi kapalı
-
-    const member = newState.member || oldState.member;
-    if (!member || member.user.bot) return;
-
-    const data = loadData();
-    if (!data.staffStats) data.staffStats = {};
-
-    const userId = member.id;
-    if (!data.staffStats[userId]) {
-      data.staffStats[userId] = {
-        todayVoice: 0,
-        totalVoice: 0,
-        todayMsgs: 0,
-        totalMsgs: 0,
-        todayTickets: 0,
-        totalTickets: 0,
-        voiceJoinedAt: null
-      };
-    }
-
-    const userStats = data.staffStats[userId];
-
-    // 1. Sese Katıldı
-    if (!oldState.channelId && newState.channelId) {
-      if (newState.channelId !== newState.guild.afkChannelId) {
-        userStats.voiceJoinedAt = Date.now();
-        saveData(data);
-      }
-    }
-    // 2. Sesten Ayrıldı
-    else if (oldState.channelId && !newState.channelId) {
-      if (userStats.voiceJoinedAt) {
-        const duration = Date.now() - userStats.voiceJoinedAt;
-        userStats.todayVoice = (userStats.todayVoice || 0) + duration;
-        userStats.totalVoice = (userStats.totalVoice || 0) + duration;
-        userStats.voiceJoinedAt = null;
-        saveData(data);
-      }
-    }
-    // 3. Kanal Değiştirdi
-    else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
-      if (newState.channelId === newState.guild.afkChannelId) {
-        // AFK odasına geçtiyse süreyi durdur
-        if (userStats.voiceJoinedAt) {
-          const duration = Date.now() - userStats.voiceJoinedAt;
-          userStats.todayVoice = (userStats.todayVoice || 0) + duration;
-          userStats.totalVoice = (userStats.totalVoice || 0) + duration;
-          userStats.voiceJoinedAt = null;
-          saveData(data);
-        }
-      } else {
-        // Normal odaya geçtiyse
-        if (userStats.voiceJoinedAt) {
-          const duration = Date.now() - userStats.voiceJoinedAt;
-          userStats.todayVoice = (userStats.todayVoice || 0) + duration;
-          userStats.totalVoice = (userStats.totalVoice || 0) + duration;
-        }
-        userStats.voiceJoinedAt = Date.now();
-        saveData(data);
-      }
-    }
-  } catch (err) {
-    console.error('Ses takip hatası:', err);
-  }
-});
-
 // ==========================================
 // 5. KANALA ATILAN SS'LERİ OTOMATİK OKUYAN DİNLEYİCİ (MESSAGE CREATE)
+// (Hiçbir komut yazmadan #abone-kanit kanalına görsel atıldığında çalışır)
+// (Kırpılmış SS'leri engeller ve 2 KANALIN İKİSİNİ DE ZORUNLU KILAR)
 // ==========================================
 client.on('messageCreate', async (message) => {
   try {
     // Botların mesajlarını ve DM'leri yoksay
     if (message.author.bot || !message.guild) return;
 
-    const data = loadData();
     const channelName = message.channel.name.toLowerCase();
-
-    // Ticket / Destek / Başvuru Kanalı Kontrolü
-    const isTicketChannel = channelName.startsWith('başvuru-') ||
-                            channelName.startsWith('destek-') ||
-                            channelName.startsWith('ticket-') ||
-                            channelName.startsWith('partner-') ||
-                            channelName.startsWith('cekilis-') ||
-                            channelName.startsWith('reklam-') ||
-                            channelName.startsWith('boost-') ||
-                            (data.ticketCategoryId && message.channel.parentId === data.ticketCategoryId) ||
-                            (data.applyCategoryId && message.channel.parentId === data.applyCategoryId);
-
-    // Üstlenilen Ticket Mesaj Kontrolü (Sadece üstlenen yetkili, talep sahibi ve Yönetici yazabilir)
-    const claimInfo = activeClaimedTickets.get(message.channel.id);
-    if (isTicketChannel && claimInfo) {
-      const isClaimedStaff = message.author.id === claimInfo.claimedBy;
-      const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
-      const isStaff = isStaffMember(message.member, data);
-
-      if (isStaff && !isClaimedStaff && !isAdmin) {
-        await message.delete().catch(() => {});
-        return message.channel.send({
-          content: `⚠️ ${message.author}, bu destek talebi <@${claimInfo.claimedBy}> tarafından **üstlenilmiştir.** Yalnızca talebi üstlenen yetkili mesaj yazabilir!`
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-      }
-
-      if (isClaimedStaff) {
-        claimInfo.hasStaffReplied = true;
-      }
-    }
-
-    // Yetkili Ticket Mesaj Sayacı (Sadece Destek / Başvuru kanallarındaki mesajlar sayılır)
-    if (isStaffTrackingLive() && isTicketChannel && isStaffMember(message.member, data)) {
-      if (!data.staffStats) data.staffStats = {};
-      const sId = message.author.id;
-      if (!data.staffStats[sId]) {
-        data.staffStats[sId] = {
-          todayVoice: 0,
-          totalVoice: 0,
-          todayTicketMsgs: 0,
-          totalTicketMsgs: 0,
-          todayClaimed: 0,
-          totalClaimed: 0,
-          todayTickets: 0,
-          totalTickets: 0,
-          voiceJoinedAt: null
-        };
-      }
-      data.staffStats[sId].todayTicketMsgs = (data.staffStats[sId].todayTicketMsgs || 0) + 1;
-      data.staffStats[sId].totalTicketMsgs = (data.staffStats[sId].totalTicketMsgs || 0) + 1;
-      saveData(data);
-    }
+    const data = loadData();
 
     // Abone Kanıt Kanalı mı kontrol et
     const isTargetChannel = (data.aboneLogChannelId && message.channel.id === data.aboneLogChannelId) ||
@@ -1541,15 +996,11 @@ client.on('messageCreate', async (message) => {
       return message.reply({ content: `ℹ️ ${message.author}, zaten **${aboneRole.name}** rolüne sahipsiniz!` }).catch(() => {});
     }
 
-    // 2. Kırpılmış Ekran Görüntüsü ve Çözünürlük Kontrolü (Anti-Crop & FullScreen)
+    // 2. Kırpılmış Ekran Görüntüsü Kontrolü (Anti-Crop)
     let hasCroppedImage = false;
-    let detectedDims = '';
-
     for (const [_, att] of imageAttachments) {
-      const dims = await getImageDimensions(att);
-      if (!isImageFullScreen(dims.width, dims.height)) {
+      if (isImageCropped(att.width, att.height)) {
         hasCroppedImage = true;
-        detectedDims = `${dims.width}x${dims.height}`;
         break;
       }
     }
@@ -1559,14 +1010,12 @@ client.on('messageCreate', async (message) => {
       const cropWarningEmbed = new EmbedBuilder()
         .setColor('#EF4444')
         .setAuthor({ name: 'Vyron Güvenlik & Doğrulama Sistemi', iconURL: guild.iconURL({ dynamic: true }) })
-        .setTitle('❌ KIRPILMIŞ / DÜŞÜK BOYUTLU GÖRSEL TESPİT EDİLDİ!')
+        .setTitle('❌ KIRPILMIŞ EKRAN GÖRÜNTÜSÜ TESPİT EDİLDİ!')
         .setDescription(
-          `Merhaba ${message.author}! Gönderdiğiniz görsel **kırpılmış veya tam ekran olmadığı** için reddedildi. ${detectedDims ? `\`(${detectedDims})\`` : ''}\n\n` +
-          `📌 **ZORUNLU KURAL (TAM EKRAN SS):**\n` +
-          `Lütfen görseli **kesinlikle kırpmadan**, telefonunuzun veya monitörünüzün **TAM EKRANINI (saat, şarj, bildirim veya tarayıcı sekmeleri gözükecek şekilde)** atınız!\n\n` +
-          `🖥️ **Bilgisayar:** En az 1080px genişlik (1920x1080 vb.)\n` +
-          `📱 **Telefon:** En az 1080px yükseklik (1080x2400 vb.)\n\n` +
-          `👇 Lütfen kırpılmamış orijinal tam ekran SS ile tekrar deneyiniz!`
+          `Merhaba ${message.author}! Gönderdiğiniz görsel **kırpılmış** olduğu için reddedildi.\n\n` +
+          `📌 **ZORUNLU KURAL:**\n` +
+          `Lütfen görseli **kesinlikle kırpmadan**, telefonunuzun veya bilgisayar monitörünüzün **TAM EKRANINI (saat, şarj veya tarayıcı çubuğu gözükecek şekilde)** atınız!\n\n` +
+          `👇 Kırpılmamış orijinal tam ekran SS ile tekrar deneyiniz.`
         )
         .setFooter({ text: FOOTER_TEXT })
         .setTimestamp();
@@ -1737,10 +1186,6 @@ client.on('interactionCreate', async (interaction) => {
               value: '• `/turnuva-duyuru` : Katılım sayaçlı, Minecraft IGN toplayan ve `#🏆・turnuva-gelecek-olanlar` kanalına listeleyen turnuva sistemi.\n• `/duyuru` : Direkt GIF / Resim dosyası sürükleyip bırakabileceğiniz efektli ve temalı klan duyurusu.'
             },
             {
-              name: '👑 Komutsuz Yetkili Mesai & Canlı Sıralama',
-              value: '• 09:00 - 00:00 mesai saatlerinde yetkililerin seste kalma süreleri, mesajları ve çözdükleri talepler **komutsuz olarak 7/24 otomatik** hesaplanır!\n• Gece 00:00\'da günün yıldızı yetkilisi ilan edilir.\n• `/yetkili-siralama` : Canlı sıralama panosunu gösterir / yeniler.\n• `/yetkili-siralama-kur` : Sıralama tablosunu belirlenen kanala kurar.\n• `/yetkili-rapor` : Detaylı yetkili mesai karnesi gösterir.'
-            },
-            {
               name: '🔍 Sunucu Denetimi & Otomatik Kurulum',
               value: '• `/sunucu-analiz` : Mevcut kanallarını analiz eder, eksik kanalları ve panelleri tek tıkla kurar.'
             },
@@ -1839,95 +1284,6 @@ client.on('interactionCreate', async (interaction) => {
           content: `✅ **Abone kanıt kanalı ayarlandı:** ${channel}\nArtık üyeler bu kanala fotoğraf attığında bot yapay zeka ile okuyup rolü otomatik verecektir! 🤖📸`,
           ephemeral: true
         });
-      }
-
-      // 4. /yetkili-siralama
-      if (commandName === 'yetkili-siralama') {
-        await interaction.deferReply({ ephemeral: true });
-        const guild = interaction.guild;
-        await updateStaffLeaderboard(guild);
-        const data = loadData();
-        const ch = guild.channels.cache.get(data.staffLeaderboardChannelId);
-        return interaction.editReply({
-          content: `✅ **Yetkili canlı mesai sıralaması güncellendi!**\n📊 Sıralama Panosu: ${ch || '#yetkili-sıralaması'}`
-        });
-      }
-
-      // 5. /yetkili-siralama-kur
-      if (commandName === 'yetkili-siralama-kur') {
-        const targetChannel = interaction.options.getChannel('kanal');
-        const data = loadData();
-        data.staffLeaderboardChannelId = targetChannel.id;
-        data.staffLeaderboardMessageId = null; // Sıfırdan yeni pano gönder
-        saveData(data);
-
-        await interaction.deferReply({ ephemeral: true });
-        await updateStaffLeaderboard(interaction.guild);
-        return interaction.editReply({
-          content: `✅ **Yetkili canlı mesai panosu ${targetChannel} kanalına başarıyla kuruldu!**\n` +
-                   `Bot bu panodaki sıralamayı komutsuz olarak 7/24 otomatik güncelleyecektir. 👑📊`
-        });
-      }
-
-      // 6. /yetkili-rapor
-      if (commandName === 'yetkili-rapor') {
-        const targetUser = interaction.options.getUser('yetkili');
-        const data = loadData();
-        const guild = interaction.guild;
-
-        if (targetUser) {
-          const stats = data.staffStats?.[targetUser.id] || {
-            todayVoice: 0,
-            totalVoice: 0,
-            todayTicketMsgs: 0,
-            totalTicketMsgs: 0,
-            todayClaimed: 0,
-            totalClaimed: 0,
-            todayTickets: 0,
-            totalTickets: 0
-          };
-
-          const member = await guild.members.fetch(targetUser.id).catch(() => null);
-          let liveVoice = stats.todayVoice || 0;
-          if (member?.voice?.channelId && member.voice.channelId !== guild.afkChannelId && stats.voiceJoinedAt) {
-            liveVoice += (Date.now() - stats.voiceJoinedAt);
-          }
-
-          const dailyScore = Math.floor(liveVoice / 60000) * 2 +
-                             (stats.todayClaimed || 0) * 20 +
-                             (stats.todayTickets || 0) * 25 +
-                             (stats.todayTicketMsgs || 0) * 2;
-
-          const userReportEmbed = new EmbedBuilder()
-            .setColor('#8B5CF6')
-            .setAuthor({ name: `${targetUser.username} • Yetkili Mesai Karnesi`, iconURL: targetUser.displayAvatarURL({ dynamic: true }) })
-            .setTitle(`📊 Yetkili Performans Detayı`)
-            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
-            .addFields(
-              { name: '👤 Yetkili', value: `${targetUser} (\`${targetUser.tag}\`)`, inline: true },
-              { name: '🎙️ Ses Durumu', value: member?.voice?.channelId ? `🟢 Seste (${member.voice.channel.name})` : '⚪ Boşta', inline: true },
-              { name: '⭐ Günlük Puan', value: `\`${dailyScore} Puan\``, inline: true },
-              { name: '📅 Bugünkü Seste Kalma', value: `\`${formatDuration(liveVoice)}\``, inline: true },
-              { name: '✋ Bugünkü Üstlenilen Talep', value: `\`${stats.todayClaimed || 0} adet\``, inline: true },
-              { name: '💬 Bugünkü Destek Mesajı', value: `\`${stats.todayTicketMsgs || 0} adet\``, inline: true },
-              { name: '✅ Bugünkü Çözülen Talep', value: `\`${stats.todayTickets || 0} adet\``, inline: true },
-              { name: '🏆 Toplam Seste Kalma (Genel)', value: `\`${formatDuration(stats.totalVoice || 0)}\``, inline: true },
-              { name: '✋ Toplam Üstlenilen Talep', value: `\`${stats.totalClaimed || 0} adet\``, inline: true },
-              { name: '💬 Toplam Destek Mesajı', value: `\`${stats.totalTicketMsgs || 0} adet\``, inline: true },
-              { name: '✅ Toplam Çözülen Talep', value: `\`${stats.totalTickets || 0} adet\``, inline: true }
-            )
-            .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp();
-
-          return interaction.reply({ embeds: [userReportEmbed], ephemeral: true });
-        } else {
-          const ch = await getOrCreateStaffLeaderboardChannel(guild);
-          await updateStaffLeaderboard(guild);
-          return interaction.reply({
-            content: `📊 **Tüm yetkililerin canlı mesai sıralaması ${ch} kanalında yer almaktadır!**\nBelirli bir yetkilinin detaylı karnesini görmek için \`/yetkili-rapor yetkili:@isim\` komutunu kullanabilirsiniz.`,
-            ephemeral: true
-          });
-        }
       }
 
       // 4. /basvuru-yetkili
@@ -3039,11 +2395,6 @@ client.on('interactionCreate', async (interaction) => {
 
       const closeRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('ticket_claim_action')
-          .setLabel('✋ Talebi Üstlen')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('✋'),
-        new ButtonBuilder()
           .setCustomId('ticket_close_action')
           .setLabel('🔒 Talebi Kapat')
           .setStyle(ButtonStyle.Danger)
@@ -3059,91 +2410,6 @@ client.on('interactionCreate', async (interaction) => {
     // ----------------------------------------------------
     // C. MODAL AÇMA & GÖNDERME
     // ----------------------------------------------------
-    // 0.1. Ticket / Başvuru Üstlenme Butonu (✋ Talebi Üstlen)
-    if (interaction.isButton() && interaction.customId.startsWith('ticket_claim_action')) {
-      const data = loadData();
-      const member = interaction.member;
-
-      if (!isStaffMember(member, data)) {
-        return interaction.reply({ content: '❌ Bu talebi yalnızca yetkililer üstlenebilir!', ephemeral: true });
-      }
-
-      const channel = interaction.channel;
-      const existingClaim = activeClaimedTickets.get(channel.id);
-      if (existingClaim) {
-        return interaction.reply({
-          content: `⚠️ Bu destek talebi zaten <@${existingClaim.claimedBy}> tarafından üstlenilmiştir!`,
-          ephemeral: true
-        });
-      }
-
-      const staffId = interaction.user.id;
-
-      // 5 Dakika İçinde Yanıt Vermeme Kontrolü (DM & Kanal Uyarısı)
-      const claimInfo = {
-        claimedBy: staffId,
-        claimedAt: Date.now(),
-        hasStaffReplied: false,
-        timer: null
-      };
-
-      claimInfo.timer = setTimeout(async () => {
-        try {
-          const current = activeClaimedTickets.get(channel.id);
-          if (current && !current.hasStaffReplied) {
-            // 1. Yetkiliye Özel DM Uyarısı
-            try {
-              await interaction.user.send({
-                content: `⚠️ **DİKKAT:** **${interaction.guild.name}** sunucusunda üstlendiğiniz **#${channel.name}** destek biletine **5 dakikadır hiçbir yanıt vermediniz!**\nLütfen talep sahibiyle iletişime geçiniz.`
-              });
-            } catch (e) {}
-
-            // 2. Kanal İçi Uyarı Mesajı
-            await channel.send({
-              content: `⚠️ ${interaction.user}, üstlendiğiniz bu destek talebine **5 dakikadır herhangi bir cevap yazmadınız!** Lütfen talep sahibiyle ilgileniniz.`
-            }).catch(() => {});
-          }
-        } catch (e) {}
-      }, 5 * 60 * 1000);
-
-      activeClaimedTickets.set(channel.id, claimInfo);
-
-      // Yetkili İstatistiklerini Güncelle (Yarın 09:00'dan itibaren)
-      if (isStaffTrackingLive()) {
-        if (!data.staffStats) data.staffStats = {};
-        if (!data.staffStats[staffId]) {
-          data.staffStats[staffId] = {
-            todayVoice: 0,
-            totalVoice: 0,
-            todayTicketMsgs: 0,
-            totalTicketMsgs: 0,
-            todayClaimed: 0,
-            totalClaimed: 0,
-            todayTickets: 0,
-            totalTickets: 0,
-            voiceJoinedAt: null
-          };
-        }
-        data.staffStats[staffId].todayClaimed = (data.staffStats[staffId].todayClaimed || 0) + 1;
-        data.staffStats[staffId].totalClaimed = (data.staffStats[staffId].totalClaimed || 0) + 1;
-        saveData(data);
-      }
-
-      const claimEmbed = new EmbedBuilder()
-        .setColor('#10B981')
-        .setAuthor({ name: 'Vyron Destek & Klan Yönetimi', iconURL: interaction.guild.iconURL({ dynamic: true }) })
-        .setTitle('✋ TALEP YETKİLİ TARAFINDAN ÜSTLENİLDİ!')
-        .setDescription(
-          `Bu destek talebi yetkilimiz ${interaction.user} (\`${interaction.user.tag}\`) tarafından **üstlenildi.**\n\n` +
-          `🔒 *Talebe özel ilgi için yalnızca talebi üstlenen yetkili mesaj yazabilir.*\n` +
-          `⏱️ *Yetkilinin 5 dakika içinde ilk yanıtı vermesi beklenmektedir.*`
-        )
-        .setFooter({ text: FOOTER_TEXT })
-        .setTimestamp();
-
-      return interaction.reply({ embeds: [claimEmbed] });
-    }
-
     // 1. Turnuva Katılım Modalı Açma
     if (interaction.isButton() && interaction.customId.startsWith('btn_tourney_register_')) {
       const eventId = interaction.customId.replace('btn_tourney_register_', '');
@@ -3347,12 +2613,7 @@ client.on('interactionCreate', async (interaction) => {
       });
 
       const appId = applicationCounter++;
-      const clanRoleId = data.clanRoleId ||
-        guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron • klan üyesi')?.id ||
-        guild.roles.cache.find(r => r.name.toLowerCase() === 'klan üyesi')?.id ||
-        guild.roles.cache.find(r => r.name.toLowerCase().includes('klan üye') && !r.name.toLowerCase().includes('has'))?.id ||
-        guild.roles.cache.find(r => r.name.toLowerCase().includes('klan') && !r.name.toLowerCase().includes('has'))?.id ||
-        'none';
+      const clanRoleId = data.clanRoleId || guild.roles.cache.find(r => r.name.toLowerCase().includes('klan üye'))?.id || 'none';
 
       const ticketEmbed = new EmbedBuilder()
         .setColor('#8B5CF6')
@@ -3374,27 +2635,22 @@ client.on('interactionCreate', async (interaction) => {
 
       const ticketRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`ticket_claim_action_${applicant.id}`)
-          .setLabel('✋ Başvuruyu Üstlen')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('✋'),
-        new ButtonBuilder()
           .setCustomId(`ticket_call_anydesk_${applicant.id}`)
-          .setLabel('📢 Anydesk Çağır')
-          .setStyle(ButtonStyle.Secondary)
+          .setLabel('📢 Anydesk Kontrole Çağır')
+          .setStyle(ButtonStyle.Primary)
           .setEmoji('🖥️'),
         new ButtonBuilder()
           .setCustomId(`ticket_pass_modal_${applicant.id}_${clanRoleId}`)
-          .setLabel('✅ Temiz (Onayla)')
+          .setLabel('✅ Temiz (Onayla & Logla)')
           .setStyle(ButtonStyle.Success)
           .setEmoji('🛡️'),
         new ButtonBuilder()
           .setCustomId(`ticket_fail_modal_${applicant.id}`)
-          .setLabel('🚫 Hile')
+          .setLabel('🚫 Hile Çıktı (SS & Reddet)')
           .setStyle(ButtonStyle.Danger),
         new ButtonBuilder()
           .setCustomId(`ticket_reject_close_${applicant.id}`)
-          .setLabel('❌ Reddet')
+          .setLabel('❌ Reddet & Kapat')
           .setStyle(ButtonStyle.Secondary)
       );
 
@@ -3427,23 +2683,7 @@ client.on('interactionCreate', async (interaction) => {
       const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
       const data = loadData();
       const roleIdToUse = (clanRoleId && clanRoleId !== 'none') ? clanRoleId : data.clanRoleId;
-      const clanRole = (roleIdToUse && roleIdToUse !== 'none' && interaction.guild.roles.cache.get(roleIdToUse)) ||
-        interaction.guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron • klan üyesi') ||
-        interaction.guild.roles.cache.find(r => r.name.toLowerCase() === 'klan üyesi') ||
-        interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('klan üye') && !r.name.toLowerCase().includes('has')) ||
-        interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('klan') && !r.name.toLowerCase().includes('has'));
-
-      // Yetkili Talep İstatistiğini Güncelle (Yarın 09:00'dan itibaren)
-      if (isStaffTrackingLive()) {
-        if (!data.staffStats) data.staffStats = {};
-        const staffId = interaction.user.id;
-        if (!data.staffStats[staffId]) {
-          data.staffStats[staffId] = { todayVoice: 0, totalVoice: 0, todayTicketMsgs: 0, totalTicketMsgs: 0, todayClaimed: 0, totalClaimed: 0, todayTickets: 0, totalTickets: 0, voiceJoinedAt: null };
-        }
-        data.staffStats[staffId].todayTickets = (data.staffStats[staffId].todayTickets || 0) + 1;
-        data.staffStats[staffId].totalTickets = (data.staffStats[staffId].totalTickets || 0) + 1;
-        saveData(data);
-      }
+      const clanRole = interaction.guild.roles.cache.get(roleIdToUse) || interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('klan üye'));
 
       if (applicant && clanRole) {
         await applicant.roles.add(clanRole).catch(() => {});
@@ -3501,19 +2741,6 @@ client.on('interactionCreate', async (interaction) => {
       const cheatNotes = interaction.fields.getTextInputValue('cheat_notes') || 'Belirtilmedi.';
 
       const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
-
-      // Yetkili Talep İstatistiğini Güncelle (Yarın 09:00'dan itibaren)
-      if (isStaffTrackingLive()) {
-        const data = loadData();
-        if (!data.staffStats) data.staffStats = {};
-        const staffId = interaction.user.id;
-        if (!data.staffStats[staffId]) {
-          data.staffStats[staffId] = { todayVoice: 0, totalVoice: 0, todayTicketMsgs: 0, totalTicketMsgs: 0, todayClaimed: 0, totalClaimed: 0, todayTickets: 0, totalTickets: 0, voiceJoinedAt: null };
-        }
-        data.staffStats[staffId].todayTickets = (data.staffStats[staffId].todayTickets || 0) + 1;
-        data.staffStats[staffId].totalTickets = (data.staffStats[staffId].totalTickets || 0) + 1;
-        saveData(data);
-      }
 
       if (applicant) {
         try {
@@ -3936,20 +3163,6 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
-
-        // Yetkili Talep İstatistiğini Güncelle (Yarın 09:00'dan itibaren)
-        if (isStaffTrackingLive()) {
-          const data = loadData();
-          if (!data.staffStats) data.staffStats = {};
-          const staffId = interaction.user.id;
-          if (!data.staffStats[staffId]) {
-            data.staffStats[staffId] = { todayVoice: 0, totalVoice: 0, todayTicketMsgs: 0, totalTicketMsgs: 0, todayClaimed: 0, totalClaimed: 0, todayTickets: 0, totalTickets: 0, voiceJoinedAt: null };
-          }
-          data.staffStats[staffId].todayTickets = (data.staffStats[staffId].todayTickets || 0) + 1;
-          data.staffStats[staffId].totalTickets = (data.staffStats[staffId].totalTickets || 0) + 1;
-          saveData(data);
-        }
-
         if (applicant) {
           try {
             await applicant.send({
@@ -4076,19 +3289,6 @@ client.on('interactionCreate', async (interaction) => {
 
       // 9. TICKET KAPATMA
       if (customId === 'ticket_close_action') {
-        // Yetkili Talep İstatistiğini Güncelle (Yarın 09:00'dan itibaren)
-        if (isStaffTrackingLive()) {
-          const data = loadData();
-          if (!data.staffStats) data.staffStats = {};
-          const staffId = interaction.user.id;
-          if (!data.staffStats[staffId]) {
-            data.staffStats[staffId] = { todayVoice: 0, totalVoice: 0, todayTicketMsgs: 0, totalTicketMsgs: 0, todayClaimed: 0, totalClaimed: 0, todayTickets: 0, totalTickets: 0, voiceJoinedAt: null };
-          }
-          data.staffStats[staffId].todayTickets = (data.staffStats[staffId].todayTickets || 0) + 1;
-          data.staffStats[staffId].totalTickets = (data.staffStats[staffId].totalTickets || 0) + 1;
-          saveData(data);
-        }
-
         await interaction.reply({ embeds: [new EmbedBuilder().setColor('#EF4444').setDescription('🔒 Destek talebi 5 saniye içinde kapatılacak...').setFooter({ text: FOOTER_TEXT })] });
         setTimeout(async () => {
           await interaction.channel.delete().catch(() => {});
