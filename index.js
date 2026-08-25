@@ -20,6 +20,7 @@ const express = require('express');
 const ms = require('ms');
 const fs = require('fs');
 const path = require('path');
+const Tesseract = require('tesseract.js');
 require('dotenv').config();
 
 // Sabit Marka İmzası (Footer)
@@ -38,9 +39,12 @@ function loadData() {
       return {
         staffRoleIds: parsed.staffRoleIds || [],
         ticketStaffRoleIds: parsed.ticketStaffRoleIds || [],
+        aboneStaffRoleIds: parsed.aboneStaffRoleIds || [],
         applyCategoryId: parsed.applyCategoryId || null,
         ticketCategoryId: parsed.ticketCategoryId || null,
-        clanRoleId: parsed.clanRoleId || null
+        clanRoleId: parsed.clanRoleId || null,
+        aboneRoleId: parsed.aboneRoleId || null,
+        aboneLogChannelId: parsed.aboneLogChannelId || null
       };
     }
   } catch (e) {
@@ -49,9 +53,12 @@ function loadData() {
   return {
     staffRoleIds: [],
     ticketStaffRoleIds: [],
+    aboneStaffRoleIds: [],
     applyCategoryId: null,
     ticketCategoryId: null,
-    clanRoleId: null
+    clanRoleId: null,
+    aboneRoleId: null,
+    aboneLogChannelId: null
   };
 }
 
@@ -96,10 +103,13 @@ app.listen(PORT, () => {
 
 // ==========================================
 // 2. DISCORD CLIENT & BELLEK HAVUZLARI
+// (Kanala atılan SS'leri yakalamak için MessageContent intenti aktif)
 // ==========================================
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -110,10 +120,78 @@ const activeEvents = new Map();
 let applicationCounter = 1;
 
 // ==========================================
-// YARDIMCI FONKSİYONLAR: KATEGORİ & KANAL YÖNETİMİ
+// YARDIMCI FONKSİYONLAR: YAPAY ZEKA / OCR GÖRSEL ANALİZİ
 // ==========================================
 
-// 1. Başvuru Odalarının Açılacağı Kategori (Fotoğraftaki '・ Destek' veya 'Destek' kategorisini otomatik bulur)
+// YouTube Ekran Görüntüsünü (PNG/JPG) Otomatik Okuyan Çok Dilli Yapay Zeka / OCR Motoru
+async function analyzeYoutubeScreenshot(imageUrl) {
+  try {
+    const result = await Tesseract.recognize(imageUrl, 'eng', {
+      logger: () => {}
+    });
+
+    const rawText = (result?.data?.text || '').toLowerCase();
+    
+    // Türkçe ve yabancı karakter varyasyonlarını normalize et
+    const cleanText = rawText
+      .replace(/ı/g, 'i')
+      .replace(/ğ/g, 'g')
+      .replace(/ü/g, 'u')
+      .replace(/ş/g, 's')
+      .replace(/ö/g, 'o')
+      .replace(/ç/g, 'c');
+
+    // 1. Çok Dilli Abonelik Doğrulama Anahtar Kelimeleri
+    // Türkçe: abone, olundu, abonesiniz, abonelik, bildirim, zil
+    // İngilizce: subscribed, subscriber, subscribers, notification, bell
+    // Almanca/Fransızca/İspanyolca: abonniert, abonné, suscrito
+    const subKeywords = [
+      'abone', 'olundu', 'abonesiniz', 'abonelik', 'abonedir',
+      'subscribed', 'subscribers', 'subscriber', 'subscribing',
+      'notification', 'notifications', 'bildirim', 'tum bildirimler', 'tum', 'zil', 'bell',
+      'abonniert', 'abonne', 'suscrito'
+    ];
+
+    // 2. Hedef Kanallar & YouTube Göstergeleri
+    const channelKeywords = [
+      'birim', 'fonksiyon', 'birimfonksiyon', 'smp', 'canavari',
+      'froz', 'frozzeq', 'xfrozzeq', 'youtube', 'video', 'kanal', 'channel'
+    ];
+
+    const matchedSubs = subKeywords.filter(k => cleanText.includes(k));
+    const matchedChannels = channelKeywords.filter(k => cleanText.includes(k));
+
+    // 'abone olundu', 'abonesiniz', 'subscribed' gibi doğrudan kanıt veya 'abone' + 'zil/bildirim/youtube'
+    const hasStrongSubProof = cleanText.includes('olundu') ||
+                              cleanText.includes('abonesiniz') ||
+                              cleanText.includes('subscribed') ||
+                              cleanText.includes('abonelikten') ||
+                              cleanText.includes('abonniert') ||
+                              cleanText.includes('suscrito') ||
+                              (cleanText.includes('abone') && (cleanText.includes('zil') || cleanText.includes('bildirim') || cleanText.includes('tum') || cleanText.includes('all')));
+
+    const hasChannelProof = matchedChannels.length >= 1 || cleanText.includes('youtube');
+
+    const isValid = hasStrongSubProof || (matchedSubs.length >= 1 && hasChannelProof);
+
+    return {
+      isValid,
+      matchedSubs,
+      matchedChannels,
+      extractedSnippet: rawText.substring(0, 160).replace(/\n/g, ' ')
+    };
+  } catch (error) {
+    console.error('Yapay Zeka OCR analiz hatası:', error);
+    return {
+      isValid: false,
+      error: error.message,
+      matchedSubs: [],
+      matchedChannels: []
+    };
+  }
+}
+
+// 1. Başvuru Odalarının Açılacağı Kategori
 async function getOrCreateApplyCategory(guild) {
   try {
     const data = loadData();
@@ -123,7 +201,6 @@ async function getOrCreateApplyCategory(guild) {
     }
 
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
-    // Sunucudaki 'Destek', '・ Destek', 'Başvuru' vb. tüm varyasyonları bulur
     let cat = channels.find(c =>
       c && c.type === ChannelType.GuildCategory &&
       (c.name.toLowerCase().includes('destek') || c.name.toLowerCase().includes('başvuru') || c.name.toLowerCase().includes('ticket') || c.name.toLowerCase().includes('talep'))
@@ -144,7 +221,7 @@ async function getOrCreateApplyCategory(guild) {
   }
 }
 
-// 2. Ticket / Destek Odalarının Açılacağı Kategori (Fotoğraftaki '・ Destek' kategorisini bulur)
+// 2. Ticket / Destek Odalarının Açılacağı Kategori
 async function getOrCreateTicketCategory(guild) {
   try {
     const data = loadData();
@@ -174,7 +251,41 @@ async function getOrCreateTicketCategory(guild) {
   }
 }
 
-// 3. Turnuva Katılımcı Listesi Kanalı
+// 3. Abone Kanıt Kanalı (#🌌・abone-kanit - Herkesin SS attığı yer)
+async function getOrCreateAboneLogChannel(guild) {
+  try {
+    const data = loadData();
+    if (data.aboneLogChannelId) {
+      const savedCh = guild.channels.cache.get(data.aboneLogChannelId);
+      if (savedCh) return savedCh;
+    }
+
+    const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    let ch = channels.find(c =>
+      c && c.type === ChannelType.GuildText &&
+      (c.name.includes('abone-kanit') || c.name.includes('abone-kanıt') || c.name.includes('abone-ss') || c.name.includes('abone'))
+    );
+
+    if (!ch) {
+      ch = await guild.channels.create({
+        name: '🌌・abone-kanit',
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+          { id: guild.roles.everyone.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.AddReactions] }
+        ]
+      });
+      data.aboneLogChannelId = ch.id;
+      saveData(data);
+    }
+    return ch;
+  } catch (err) {
+    console.error('Abone kanıt kanalı hatası:', err);
+    return null;
+  }
+}
+
+// 4. Turnuva Katılımcı Listesi Kanalı
 async function getOrCreateTourneyChannel(guild) {
   try {
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
@@ -218,7 +329,7 @@ async function getOrCreateTourneyChannel(guild) {
   }
 }
 
-// 4. Sadece Yöneticilerin Görebileceği #temiz-log Kanalı
+// 5. Sadece Yöneticilerin Görebileceği #temiz-log Kanalı
 async function getOrCreateCleanLogChannel(guild) {
   try {
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
@@ -240,7 +351,7 @@ async function getOrCreateCleanLogChannel(guild) {
   }
 }
 
-// 5. Sadece Yöneticilerin Görebileceği #hile-log Kanalı
+// 6. Sadece Yöneticilerin Görebileceği #hile-log Kanalı
 async function getOrCreateCheatLogChannel(guild) {
   try {
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
@@ -277,7 +388,36 @@ const commands = [
     .setDescription('Sunucuyu analiz eder, eksik kanalları/panelleri tespit edip tek tıkla otomatik kurar.')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-  // 3. /basvuru-yetkili (SINIRSIZ BAŞVURU YETKİLİSİ EKLE/ÇIKAR/LİSTELE)
+  // 3. /abone-kur (FOTOĞRAFTAKİ VYRON ABONE PANELİNİ KURAR)
+  new SlashCommandBuilder()
+    .setName('abone-kur')
+    .setDescription('Fotoğraftaki YouTube abonelik bilgilendirme panelini kurar.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Abone panelinin gönderileceği kanal (Örn: #abone-bilgi)')
+        .setRequired(true)
+        .addChannelTypes(ChannelType.GuildText)
+    )
+    .addRoleOption(option =>
+      option.setName('abone_rolu')
+        .setDescription('Onaylanınca verilecek rol (Örn: @Vyron • Abone)')
+        .setRequired(false)
+    ),
+
+  // 4. /abone-kanal (SS'LERİN DİREKT ATILACAĞI KANALI SEÇME)
+  new SlashCommandBuilder()
+    .setName('abone-kanal')
+    .setDescription('Üyelerin fotoğraf atıp botun otomatik okuyacağı kanalı ayarlar (Örn: #abone-kanit).')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Abone SS atılacak kanal')
+        .setRequired(true)
+        .addChannelTypes(ChannelType.GuildText)
+    ),
+
+  // 5. /basvuru-yetkili
   new SlashCommandBuilder()
     .setName('basvuru-yetkili')
     .setDescription('Klan başvuru ticketlarına bakabilecek yetkili rollerini sınırsız olarak ekler veya çıkarır.')
@@ -298,7 +438,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 4. /ticket-yetkili (SINIRSIZ TICKET / DESTEK YETKİLİSİ EKLE/ÇIKAR/LİSTELE)
+  // 6. /ticket-yetkili
   new SlashCommandBuilder()
     .setName('ticket-yetkili')
     .setDescription('Ticket ve Destek taleplerine bakabilecek yetkili rollerini sınırsız olarak ekler veya çıkarır.')
@@ -319,7 +459,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 5. /basvuru-kategori
+  // 7. /basvuru-kategori
   new SlashCommandBuilder()
     .setName('basvuru-kategori')
     .setDescription('Klan başvuru ticketlarının hangi kategori altında açılacağını ayarlar.')
@@ -331,7 +471,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildCategory)
     ),
 
-  // 6. /ticket-kategori
+  // 8. /ticket-kategori
   new SlashCommandBuilder()
     .setName('ticket-kategori')
     .setDescription('Destek ve Ticket odalarının hangi kategori altında açılacağını ayarlar.')
@@ -343,7 +483,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildCategory)
     ),
 
-  // 7. /turnuva-duyuru
+  // 9. /turnuva-duyuru
   new SlashCommandBuilder()
     .setName('turnuva-duyuru')
     .setDescription('Turnuva duyurusu yayınlar, otomatik #🏆・turnuva-gelecek-olanlar kanalını kurar ve IGN toplar.')
@@ -390,7 +530,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 8. /basvuru-kur
+  // 10. /basvuru-kur
   new SlashCommandBuilder()
     .setName('basvuru-kur')
     .setDescription('Adaya özel ticket açan ve yetkililerin yönettiği başvuru panelini kurar.')
@@ -413,7 +553,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildCategory)
     ),
 
-  // 9. /ticket-kur (KATEGORİLİ SEÇİM MENÜLÜ DESTEK SİSTEMİ)
+  // 11. /ticket-kur
   new SlashCommandBuilder()
     .setName('ticket-kur')
     .setDescription('Kategorili seçim menüsüne sahip çok amaçlı ticket ve destek paneli kurar.')
@@ -431,7 +571,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildCategory)
     ),
 
-  // 10. /hile-rapor
+  // 12. /hile-rapor
   new SlashCommandBuilder()
     .setName('hile-rapor')
     .setDescription('Hile tespit edilen adayın kanıt SS dosyasını sürükleyip yönetici #hile-log kanalına kaydeder.')
@@ -457,7 +597,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 11. /duyuru
+  // 13. /duyuru
   new SlashCommandBuilder()
     .setName('duyuru')
     .setDescription('Sunucuya dikkat çekici, özel efektli ve merak uyandıran epik klan duyurusu gönderir.')
@@ -501,7 +641,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 12. /haftanin-oyuncusu
+  // 14. /haftanin-oyuncusu
   new SlashCommandBuilder()
     .setName('haftanin-oyuncusu')
     .setDescription('Haftanın Trapcisi veya Haftanın Elytracısı unvanını oyuncuya verir ve duyurur.')
@@ -526,7 +666,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 13. /scrim
+  // 15. /scrim
   new SlashCommandBuilder()
     .setName('scrim')
     .setDescription('Klan içi maç için otomatik takım dağıtıcılı scrim lobisi başlatır.')
@@ -548,7 +688,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 14. /kilit
+  // 16. /kilit
   new SlashCommandBuilder()
     .setName('kilit')
     .setDescription('Metin kanalını üye mesajlarına kilitler veya kilidi açar.')
@@ -569,7 +709,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildText)
     ),
 
-  // 15. /klan-rutbe
+  // 17. /klan-rutbe
   new SlashCommandBuilder()
     .setName('klan-rutbe')
     .setDescription('Klan üyesini Has Klan Üyesi yapar veya klandan çıkarır.')
@@ -590,7 +730,7 @@ const commands = [
         )
     ),
 
-  // 16. /cekilis
+  // 18. /cekilis
   new SlashCommandBuilder()
     .setName('cekilis')
     .setDescription('Sunucuda süreli, butonlu ve otomatik kazanan etiketleyen çekiliş başlatır.')
@@ -619,7 +759,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildText)
     ),
 
-  // 17. /reroll
+  // 19. /reroll
   new SlashCommandBuilder()
     .setName('reroll')
     .setDescription('Çekilişten yeni bir kazanan seçer.')
@@ -630,7 +770,7 @@ const commands = [
         .setRequired(true)
     ),
 
-  // 18. /anket
+  // 20. /anket
   new SlashCommandBuilder()
     .setName('anket')
     .setDescription('Canlı sayaçlı resmi oylama başlatır.')
@@ -647,7 +787,7 @@ const commands = [
         .addChannelTypes(ChannelType.GuildText)
     ),
 
-  // 19. /mute
+  // 21. /mute
   new SlashCommandBuilder()
     .setName('mute')
     .setDescription('Belirtilen kullanıcıyı süreli olarak susturur (Timeout).')
@@ -668,18 +808,18 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 20. /unmute
+  // 22. /unmute
   new SlashCommandBuilder()
     .setName('unmute')
     .setDescription('Kullanıcının susturmasını kaldırır.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
     .addUserOption(option =>
       option.setName('kullanici')
-        .setDescription('Susturması kaldırılacak kullanıcı')
+        .setDescription('Susturulacak kullanıcı')
         .setRequired(true)
     ),
 
-  // 21. /kick
+  // 23. /kick
   new SlashCommandBuilder()
     .setName('kick')
     .setDescription('Belirtilen kullanıcıyı sunucudan atar.')
@@ -695,7 +835,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 22. /ban
+  // 24. /ban
   new SlashCommandBuilder()
     .setName('ban')
     .setDescription('Belirtilen kullanıcıyı sunucudan yasaklar.')
@@ -711,7 +851,7 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 23. /kullanici-bilgi
+  // 25. /kullanici-bilgi
   new SlashCommandBuilder()
     .setName('kullanici-bilgi')
     .setDescription('Bir kullanıcının klan rolleri, katılım tarihi ve profil bilgilerini gösterir.')
@@ -721,12 +861,12 @@ const commands = [
         .setRequired(false)
     ),
 
-  // 24. /sunucu-bilgi
+  // 26. /sunucu-bilgi
   new SlashCommandBuilder()
     .setName('sunucu-bilgi')
     .setDescription('Sunucunun ve klanın genel istatistiklerini görüntüler.'),
 
-  // 25. /dogrulama-kur
+  // 27. /dogrulama-kur
   new SlashCommandBuilder()
     .setName('dogrulama-kur')
     .setDescription('Sunucuya giren üyeler için butonlu doğrulama paneli kurar.')
@@ -743,7 +883,7 @@ const commands = [
         .setRequired(true)
     ),
 
-  // 26. /sil
+  // 28. /sil
   new SlashCommandBuilder()
     .setName('sil')
     .setDescription('Kanaldaki belirli miktarda mesajı toplu olarak siler.')
@@ -799,7 +939,128 @@ client.on('guildCreate', async (guild) => {
 });
 
 // ==========================================
-// 5. ETKİLEŞİM VE İŞLEMLER
+// 5. KANALA ATILAN SS'LERİ OTOMATİK OKUYAN DİNLEYİCİ (MESSAGE CREATE)
+// (Hiçbir komut yazmadan #abone-kanit kanalına görsel atıldığında çalışır)
+// ==========================================
+client.on('messageCreate', async (message) => {
+  try {
+    // Botların mesajlarını ve DM'leri yoksay
+    if (message.author.bot || !message.guild) return;
+
+    const channelName = message.channel.name.toLowerCase();
+    const data = loadData();
+
+    // Abone Kanıt Kanalı mı kontrol et
+    const isTargetChannel = (data.aboneLogChannelId && message.channel.id === data.aboneLogChannelId) ||
+                            channelName.includes('abone-kanit') ||
+                            channelName.includes('abone-kanıt') ||
+                            channelName.includes('abone-ss') ||
+                            channelName.includes('abone');
+
+    if (!isTargetChannel) return;
+
+    // Mesajda görsel / SS var mı?
+    const imageAttachment = message.attachments.find(att =>
+      (att.contentType && att.contentType.startsWith('image/')) ||
+      /\.(png|jpe?g|webp|bmp|gif)$/i.test(att.name || '') ||
+      /\.(png|jpe?g|webp|bmp|gif)/i.test(att.url || '')
+    );
+
+    // Eğer görsel yoksa işlem yapma
+    if (!imageAttachment) return;
+
+    // 1. Kullanıcıyı Bilgilendir
+    const loadingMsg = await message.reply({
+      content: `🔍 **Yapay Zeka Ekran Görüntünüzü İnceliyor...**\n*Lütfen bekleyiniz, YouTube aboneliğiniz okunuyor...* ⏳`
+    }).catch(() => null);
+
+    // 2. Yapay Zeka (AI / OCR) ile Ekran Görüntüsündeki Yazıları Oku
+    const ocrResult = await analyzeYoutubeScreenshot(imageAttachment.url);
+
+    // 3. Abone Rolünü Tespit Et
+    const guild = message.guild;
+    const member = message.member;
+
+    const aboneRole = (data.aboneRoleId && guild.roles.cache.get(data.aboneRoleId)) ||
+                      guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron • abone')) ||
+                      guild.roles.cache.find(r => r.name.toLowerCase().includes('abone'));
+
+    if (!aboneRole) {
+      if (loadingMsg) {
+        await loadingMsg.edit({ content: '❌ Sunucuda Abone rolü bulunamadı! Lütfen yöneticilere bildiriniz.' }).catch(() => {});
+      }
+      return;
+    }
+
+    // Zaten Abone Rolü Varsa
+    if (member.roles.cache.has(aboneRole.id)) {
+      if (loadingMsg) {
+        await loadingMsg.edit({ content: `ℹ️ ${message.author}, zaten **${aboneRole.name}** rolüne sahipsiniz!` }).catch(() => {});
+      }
+      return;
+    }
+
+    // 4. Doğrulama Durumu: ONAYLANDI MI?
+    if (ocrResult.isValid) {
+      // Rolü Otomatik Olarak Ver!
+      await member.roles.add(aboneRole).catch(console.error);
+
+      const successEmbed = new EmbedBuilder()
+        .setColor('#10B981')
+        .setAuthor({ name: 'Vyron Yapay Zeka (AI / OCR) Abone Sistemi', iconURL: guild.iconURL({ dynamic: true }) })
+        .setTitle('🎉 ABONELİĞİNİZ OTOMATİK OLARAK ONAYLANDI!')
+        .setThumbnail(message.author.displayAvatarURL({ dynamic: true, size: 256 }))
+        .setDescription(
+          `Tebrikler ${message.author}! Gönderdiğiniz ekran görüntüsü botumuz tarafından incelendi ve **YouTube aboneliğiniz başarıyla doğrulandı.**\n\n` +
+          `🏷️ **Tanımlanan Rol:** ${aboneRole}\n` +
+          `🎁 Artık özel texture packlere, private buton packlerine ve çekilişlere erişebilirsiniz! Keyifli oyunlar. ⚔️💎`
+        )
+        .addFields(
+          { name: '🔍 Tespit Edilen Göstergeler', value: `\`${ocrResult.matchedSubs.concat(ocrResult.matchedChannels).join(', ') || 'Abone Olundu / YouTube'}\``, inline: true },
+          { name: '⏰ Onay Tarihi', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true }
+        )
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp();
+
+      if (loadingMsg) {
+        await loadingMsg.edit({ content: `🎉 ${message.author}`, embeds: [successEmbed] }).catch(() => {});
+      } else {
+        await message.reply({ embeds: [successEmbed] }).catch(() => {});
+      }
+
+      await message.react('✅').catch(() => {});
+      await message.react('🎉').catch(() => {});
+    } else {
+      // Yazı Okunamadı veya Abone Olunduğu Görünmüyor
+      const failEmbed = new EmbedBuilder()
+        .setColor('#EF4444')
+        .setAuthor({ name: 'Vyron Yapay Zeka (AI / OCR) Abone Sistemi', iconURL: guild.iconURL({ dynamic: true }) })
+        .setTitle('⚠️ ABONELİK TESPİT EDİLEMEDİ')
+        .setDescription(
+          `Merhaba ${message.author}! Gönderdiğiniz ekran görüntüsünde **"Abone Olundu"** (veya *Subscribed*) yazısı net olarak okunamadı.\n\n` +
+          `📌 **Lütfen Şunlara Dikkat Ediniz:**\n` +
+          `1️⃣ YouTube kanallarına abone olduğunuz ekranın **kırpılmamış tam ekran görüntüsünü** atınız.\n` +
+          `2️⃣ Görselde **"Abone Olundu"** yazısının ve kanal adının okunaklı ve aydınlık olduğundan emin olunuz.\n\n` +
+          `Tekrar denemek için yeni ve net bir SS yükleyebilirsiniz!`
+        )
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp();
+
+      if (loadingMsg) {
+        await loadingMsg.edit({ content: `⚠️ ${message.author}`, embeds: [failEmbed] }).catch(() => {});
+      } else {
+        await message.reply({ embeds: [failEmbed] }).catch(() => {});
+      }
+
+      await message.react('❌').catch(() => {});
+    }
+  } catch (err) {
+    console.error('Mesaj SS okuma hatası:', err);
+  }
+});
+
+// ==========================================
+// 6. ETKİLEŞİM VE İŞLEMLER (SLASH & BUTONLAR)
 // ==========================================
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -816,6 +1077,10 @@ client.on('interactionCreate', async (interaction) => {
           .setTitle('⚔️ Vyron Klan & Topluluk Botu Komut Rehberi')
           .setDescription('Vyron klanı ve topluluğu için gelişmiş yönetim sistemi:')
           .addFields(
+            {
+              name: '🤖 Yapay Zeka ile Otomatik Abone Rolü (Komutsuz)',
+              value: '• Üyeler doğrudan `#abone-kanit` kanalına YouTube SS fotoğrafı atar.\n• Bot görseli yapay zeka ile otomatik okur, "Abone Olundu" yazısını tespit ettiği an **rolü kendisi verir!**\n• `/abone-kur` : Bilgilendirme panelini kurar.\n• `/abone-kanal` : SS atılacak kanalı ayarlar.'
+            },
             {
               name: '🏆 Turnuva, Event & IGN Kayıt',
               value: '• `/turnuva-duyuru` : Katılım sayaçlı, Minecraft IGN toplayan ve `#🏆・turnuva-gelecek-olanlar` kanalına listeleyen turnuva sistemi.\n• `/duyuru` : Direkt GIF / Resim dosyası sürükleyip bırakabileceğiniz efektli ve temalı klan duyurusu.'
@@ -847,7 +1112,80 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
       }
 
-      // 2. /basvuru-yetkili (SINIRSIZ BAŞVURU YETKİLİSİ EKLE/ÇIKAR/LİSTELE)
+      // 2. /abone-kur (FOTOĞRAFTAKİ DETAYLI BİLGİLENDİRME & KANALA YÖNLENDİRME)
+      if (commandName === 'abone-kur') {
+        const targetChannel = interaction.options.getChannel('kanal');
+        const customRole = interaction.options.getRole('abone_rolu');
+        const guild = interaction.guild;
+
+        const data = loadData();
+        const roleToUse = customRole || guild.roles.cache.find(r => r.name.toLowerCase().includes('abone')) || guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron • abone'));
+
+        if (roleToUse) {
+          data.aboneRoleId = roleToUse.id;
+          saveData(data);
+        }
+
+        const chAboneLog = await getOrCreateAboneLogChannel(guild);
+
+        const aboneEmbed = new EmbedBuilder()
+          .setColor('#EF4444')
+          .setAuthor({ name: 'Vyron Abone Rolü Bilgilendirme', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
+          .setTitle('🔴 VYRON ABONE ROLÜ VE ÖZEL AVANTAJLARI')
+          .setDescription(
+            `### 👑 ${roleToUse ? roleToUse : '@Vyron • Abone'} İçeriği Nedir?\n\n` +
+            `🔹 **O Arayıp Bulamadığınız Profil kodları ve Texture Packler**\n` +
+            `🔹 **Private Buton Packleri (Haftada bir kişiye özel buton pack'i kazanma şansı!)**\n` +
+            `🔹 **Abonelere özel VIP çekilişler (Gear, Kredi, VIP, Özel Roller)**\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `### 📌 ${roleToUse ? roleToUse : '@Vyron • Abone'} Almak İçin Ne Yapmalısınız?\n\n` +
+            `Sadece yapmanız gereken aşağıdaki YouTube kanallarına abone olup **TAM EKRANLI BİR ŞEKİLDE** ScreenShot (SS) alıp ${chAboneLog ? chAboneLog : '`#abone-kanit`'} kanalına yüklemektir:\n\n` +
+            `🎬 **1. Kanal:** [youtube.com/@birimfonksiyons](https://www.youtube.com/@birimfonksiyons) *(birim / smp canavarı)*\n` +
+            `🎬 **2. Kanal:** [youtube.com/@xFrozzeq](https://www.youtube.com/@xFrozzeq) *(Froz)*\n\n` +
+            `🤖 **Botumuz ${chAboneLog ? chAboneLog : 'kanala'} attığınız fotoğrafı yapay zeka ile okuyup rolünüzü saniyeler içinde otomatik verecektir!**`
+          )
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        const aboneRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel('1. Kanal (birim)')
+            .setStyle(ButtonStyle.Link)
+            .setURL('https://www.youtube.com/@birimfonksiyons')
+            .setEmoji('🔴'),
+          new ButtonBuilder()
+            .setLabel('2. Kanal (Froz)')
+            .setStyle(ButtonStyle.Link)
+            .setURL('https://www.youtube.com/@xFrozzeq')
+            .setEmoji('🔴')
+        );
+
+        await targetChannel.send({
+          content: '📢 @everyone @here 🔴 **VYRON RESMİ ABONE ROLÜ DUYURUSU!**',
+          embeds: [aboneEmbed],
+          components: [aboneRow]
+        });
+
+        return interaction.reply({
+          content: `✅ **Abone paneli ${targetChannel} kanalına kuruldu!**\n📸 Üyelerin SS atacağı kanal: ${chAboneLog || '#abone-kanit'}\n🏷️ Tanımlanan Rol: ${roleToUse ? roleToUse.name : 'Abone'}`,
+          ephemeral: true
+        });
+      }
+
+      // 3. /abone-kanal
+      if (commandName === 'abone-kanal') {
+        const channel = interaction.options.getChannel('kanal');
+        const data = loadData();
+        data.aboneLogChannelId = channel.id;
+        saveData(data);
+
+        return interaction.reply({
+          content: `✅ **Abone kanıt kanalı ayarlandı:** ${channel}\nArtık üyeler bu kanala fotoğraf attığında bot yapay zeka ile okuyup rolü otomatik verecektir! 🤖📸`,
+          ephemeral: true
+        });
+      }
+
+      // 4. /basvuru-yetkili
       if (commandName === 'basvuru-yetkili') {
         const action = interaction.options.getString('islem');
         const role = interaction.options.getRole('rol');
@@ -884,7 +1222,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 3. /ticket-yetkili (SINIRSIZ TICKET YETKİLİSİ EKLE/ÇIKAR/LİSTELE)
+      // 5. /ticket-yetkili
       if (commandName === 'ticket-yetkili') {
         const action = interaction.options.getString('islem');
         const role = interaction.options.getRole('rol');
@@ -921,7 +1259,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 4. /basvuru-kategori
+      // 6. /basvuru-kategori
       if (commandName === 'basvuru-kategori') {
         const category = interaction.options.getChannel('kategori');
         const data = loadData();
@@ -934,7 +1272,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 5. /ticket-kategori
+      // 7. /ticket-kategori
       if (commandName === 'ticket-kategori') {
         const category = interaction.options.getChannel('kategori');
         const data = loadData();
@@ -947,7 +1285,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 6. /hile-rapor
+      // 8. /hile-rapor
       if (commandName === 'hile-rapor') {
         const targetUser = interaction.options.getUser('aday');
         const cheatType = interaction.options.getString('hile_turu');
@@ -991,7 +1329,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 7. /turnuva-duyuru
+      // 9. /turnuva-duyuru
       if (commandName === 'turnuva-duyuru') {
         await interaction.deferReply({ ephemeral: true });
 
@@ -1069,7 +1407,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 8. /sunucu-analiz
+      // 10. /sunucu-analiz
       if (commandName === 'sunucu-analiz') {
         await interaction.deferReply({ ephemeral: true });
 
@@ -1081,8 +1419,6 @@ client.on('interactionCreate', async (interaction) => {
         const clanRole = roles.find(r => r.name.toLowerCase().includes('klan üye') && !r.name.toLowerCase().includes('has'));
         const hasClanRole = roles.find(r => r.name.toLowerCase().includes('has klan'));
         const memberRole = roles.find(r => r.name.toLowerCase().includes('vyron • üye') || (r.name.toLowerCase().includes('üye') && !r.name.toLowerCase().includes('klan')));
-        const trapciRole = roles.find(r => r.name.toLowerCase().includes('trapci') || r.name.toLowerCase().includes('trap'));
-        const elytraciRole = roles.find(r => r.name.toLowerCase().includes('elytrac') || r.name.toLowerCase().includes('elytra'));
 
         const roleHierarchyWarnings = [];
         if (clanRole && botRole.position <= clanRole.position) {
@@ -1099,7 +1435,7 @@ client.on('interactionCreate', async (interaction) => {
         const chCheatLog = channels.find(c => c.name.includes('hile-log') || c.name.includes('kont-edilen') || c.name.includes('kont-log'));
         const chVerify = channels.find(c => c.name.includes('doğrulama') || c.name.includes('dogrulama') || c.name.includes('kayıt') || c.name.includes('giris'));
         const chTicket = channels.find(c => c.name.includes('destek') || c.name.includes('ticket'));
-        const chPunishLog = channels.find(c => c.name.includes('ceza-kayıt') || c.name.includes('ceza-log') || c.name.includes('moderasyon-log'));
+        const chAboneLog = channels.find(c => c.name.includes('abone-kanit') || c.name.includes('abone-log') || c.name.includes('abone'));
 
         const actionItems = [];
 
@@ -1127,6 +1463,12 @@ client.on('interactionCreate', async (interaction) => {
           actionItems.push('• 🔒 **#🚫・hile-log** kanalı yok (Yöneticiye özel açılacak)');
         }
 
+        if (chAboneLog) {
+          actionItems.push(`• **Abone Kanıt Kanalı:** ${chAboneLog} (Mevcut)`);
+        } else {
+          actionItems.push('• 🔴 **#🌌・abone-kanit** kanalı yok (Otomatik oluşturulacak)');
+        }
+
         if (chVerify) {
           actionItems.push(`• **Doğrulama Kanalı:** ${chVerify} (Mevcut)`);
         } else {
@@ -1137,12 +1479,6 @@ client.on('interactionCreate', async (interaction) => {
           actionItems.push(`• **Destek Kanalı:** ${chTicket} (Mevcut)`);
         } else {
           actionItems.push('• 📩 **#destek-talebi** kanalı yok (Otomatik oluşturulacak)');
-        }
-
-        if (chPunishLog) {
-          actionItems.push(`• **Ceza Kayıt Log:** ${chPunishLog} (Mevcut)`);
-        } else {
-          actionItems.push('• ⚠️ **#ceza-kayıt-log** kanalı yok (Otomatik oluşturulacak)');
         }
 
         const totalMembers = guild.memberCount;
@@ -1169,7 +1505,7 @@ client.on('interactionCreate', async (interaction) => {
             },
             {
               name: '🔍 Tespit Edilen Log & Panel Kanalları',
-              value: `• **Turnuva Katılım:** ${chTourney ? `✅ ${chTourney}` : '❌ Yok (Açılacak)'}\n• **Klan Başvuru:** ${chApply ? `✅ ${chApply}` : '❌ Yok'}\n• **Temiz Log:** ${chCleanLog ? `✅ ${chCleanLog}` : '🔒 Yok (Açılacak)'}\n• **Hile Log:** ${chCheatLog ? `✅ ${chCheatLog}` : '🔒 Yok (Açılacak)'}\n• **Doğrulama:** ${chVerify ? `✅ ${chVerify}` : '❌ Yok'}\n• **Destek:** ${chTicket ? `✅ ${chTicket}` : '❌ Yok'}`,
+              value: `• **Turnuva Katılım:** ${chTourney ? `✅ ${chTourney}` : '❌ Yok (Açılacak)'}\n• **Abone Kanıt:** ${chAboneLog ? `✅ ${chAboneLog}` : '❌ Yok (Açılacak)'}\n• **Klan Başvuru:** ${chApply ? `✅ ${chApply}` : '❌ Yok'}\n• **Temiz Log:** ${chCleanLog ? `✅ ${chCleanLog}` : '🔒 Yok (Açılacak)'}\n• **Hile Log:** ${chCheatLog ? `✅ ${chCheatLog}` : '🔒 Yok (Açılacak)'}\n• **Doğrulama:** ${chVerify ? `✅ ${chVerify}` : '❌ Yok'}\n• **Destek:** ${chTicket ? `✅ ${chTicket}` : '❌ Yok'}`,
               inline: false
             },
             {
@@ -1203,7 +1539,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 9. /basvuru-kur
+      // 11. /basvuru-kur
       if (commandName === 'basvuru-kur') {
         const targetChannel = interaction.options.getChannel('kanal');
         const clanRole = interaction.options.getRole('klan_rolu');
@@ -1245,7 +1581,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 10. /ticket-kur
+      // 12. /ticket-kur
       if (commandName === 'ticket-kur') {
         const targetChannel = interaction.options.getChannel('kanal');
         const category = interaction.options.getChannel('kategori');
@@ -1262,7 +1598,7 @@ client.on('interactionCreate', async (interaction) => {
           .setDescription(
             `Aşağıdaki açılır menüden açmak istediğiniz **talep kategorisini** seçiniz.\n` +
             `Talebinize göre yetkili ekibimiz sizinle özel odanızda ilgilenecektir.\n\n` +
-            `🤝 **Partnerlik:** Partnerlik görüşmeleri ve şartları için.\n` +
+            `🤝 **Partnerlik:** Partnerlik görüşmeleri için.\n` +
             `🎁 **Çekiliş:** Çekiliş ödülü teslimi veya sponsorluk.\n` +
             `📢 **Reklam:** Sunucu içi reklam satın alma & anlaşmalar.\n` +
             `🚀 **İnvite & Boost:** Davet ve Takviye ödüllerini talep etme.\n` +
@@ -1294,7 +1630,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 11. /duyuru
+      // 13. /duyuru
       if (commandName === 'duyuru') {
         const channel = interaction.options.getChannel('kanal');
         const title = interaction.options.getString('baslik');
@@ -1362,7 +1698,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ GIF/Görselli epik duyuru ${channel} kanalına başarıyla yayınlandı! 🚀`, ephemeral: true });
       }
 
-      // 12. /haftanin-oyuncusu
+      // 14. /haftanin-oyuncusu
       if (commandName === 'haftanin-oyuncusu') {
         const category = interaction.options.getString('kategori');
         const targetUser = interaction.options.getUser('oyuncu');
@@ -1414,7 +1750,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ ${member} kullanıcısına **${roleName}** unvanı verildi ve duyurusu geçildi!`, ephemeral: true });
       }
 
-      // 13. /scrim
+      // 15. /scrim
       if (commandName === 'scrim') {
         const requiredCount = parseInt(interaction.options.getString('format'));
         const desc = interaction.options.getString('aciklama') || 'Vyron klan içi antrenman / scrim karşılaşması.';
@@ -1451,7 +1787,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Scrim lobisi başlatıldı!`, ephemeral: true });
       }
 
-      // 14. /kilit
+      // 16. /kilit
       if (commandName === 'kilit') {
         const action = interaction.options.getString('durum');
         const targetChannel = interaction.options.getChannel('kanal') || interaction.channel;
@@ -1480,7 +1816,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 15. /klan-rutbe
+      // 17. /klan-rutbe
       if (commandName === 'klan-rutbe') {
         const targetUser = interaction.options.getUser('kullanici');
         const action = interaction.options.getString('islem');
@@ -1506,7 +1842,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 16. /cekilis
+      // 18. /cekilis
       if (commandName === 'cekilis') {
         const durationStr = interaction.options.getString('sure');
         const prize = interaction.options.getString('odul');
@@ -1619,7 +1955,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      // 17. /reroll
+      // 19. /reroll
       if (commandName === 'reroll') {
         const queryId = interaction.options.getString('cekilis_id');
         let targetGw = null;
@@ -1646,7 +1982,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Yeni kazanan belirlendi: <@${randomWinner}>`, ephemeral: true });
       }
 
-      // 18. /anket
+      // 20. /anket
       if (commandName === 'anket') {
         const question = interaction.options.getString('soru');
         const targetChannel = interaction.options.getChannel('kanal') || interaction.channel;
@@ -1683,7 +2019,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Canlı sayaçlı anket ${targetChannel} kanalında başlatıldı!`, ephemeral: true });
       }
 
-      // 19. /mute
+      // 21. /mute
       if (commandName === 'mute') {
         const targetUser = interaction.options.getUser('kullanici');
         const durationStr = interaction.options.getString('sure');
@@ -1720,7 +2056,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ ${member} kullanıcısı **${durationStr}** süreyle susturuldu. (Sebep: ${reason})` });
       }
 
-      // 20. /unmute
+      // 22. /unmute
       if (commandName === 'unmute') {
         const targetUser = interaction.options.getUser('kullanici');
         const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
@@ -1730,7 +2066,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ ${member} kullanıcısının susturması kaldırıldı.` });
       }
 
-      // 21. /kick
+      // 23. /kick
       if (commandName === 'kick') {
         const targetUser = interaction.options.getUser('kullanici');
         const reason = interaction.options.getString('sebep') || 'Sebep belirtilmedi.';
@@ -1759,7 +2095,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `👢 **${targetUser.tag}** sunucudan atıldı! (Sebep: ${reason})` });
       }
 
-      // 22. /ban
+      // 24. /ban
       if (commandName === 'ban') {
         const targetUser = interaction.options.getUser('kullanici');
         const reason = interaction.options.getString('sebep') || 'Sebep belirtilmedi.';
@@ -1786,7 +2122,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `🔨 **${targetUser.tag}** sunucudan yasaklandı! (Sebep: ${reason})` });
       }
 
-      // 23. /kullanici-bilgi
+      // 25. /kullanici-bilgi
       if (commandName === 'kullanici-bilgi') {
         const user = interaction.options.getUser('kullanici') || interaction.user;
         const member = await interaction.guild.members.fetch(user.id).catch(() => null);
@@ -1807,7 +2143,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ embeds: [infoEmbed], ephemeral: true });
       }
 
-      // 24. /sunucu-bilgi
+      // 26. /sunucu-bilgi
       if (commandName === 'sunucu-bilgi') {
         const guild = interaction.guild;
         const totalMembers = guild.memberCount;
@@ -1831,7 +2167,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ embeds: [serverEmbed], ephemeral: true });
       }
 
-      // 25. /dogrulama-kur
+      // 27. /dogrulama-kur
       if (commandName === 'dogrulama-kur') {
         const targetChannel = interaction.options.getChannel('kanal');
         const role = interaction.options.getRole('verilecek_rol');
@@ -1853,7 +2189,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Doğrulama paneli kuruldu!`, ephemeral: true });
       }
 
-      // 26. /sil
+      // 28. /sil
       if (commandName === 'sil') {
         const amount = interaction.options.getInteger('miktar');
         await interaction.channel.bulkDelete(amount, true);
@@ -1863,7 +2199,6 @@ client.on('interactionCreate', async (interaction) => {
 
     // ----------------------------------------------------
     // B. SEÇİM MENÜSÜ (SELECT MENU) ETKİLEŞİMLERİ
-    // (Kategorili Destek, Reklam, Partnerlik & Diğer - KATEGORİ ALTINDA & SINIRSIZ YETKİLİ)
     // ----------------------------------------------------
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('ticket_select_')) {
       const selectedCategory = interaction.values[0];
@@ -1916,17 +2251,14 @@ client.on('interactionCreate', async (interaction) => {
 
       await interaction.deferReply({ ephemeral: true });
 
-      // 1. Kategoriyi Kesinlikle Bul ('・ Destek' veya ayarlanan kategori)
       const targetCategory = await getOrCreateTicketCategory(guild);
 
-      // 2. İzinleri Hazırla
       const permissionOverwrites = [
         { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         { id: applicant.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
         { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
       ];
 
-      // Sınırsız Kayıtlı Ticket Yetkili Rollerini Odaya Ekle
       const ticketStaffRoleIds = data.ticketStaffRoleIds || [];
       ticketStaffRoleIds.forEach(roleId => {
         const r = guild.roles.cache.get(roleId);
@@ -1938,7 +2270,6 @@ client.on('interactionCreate', async (interaction) => {
         }
       });
 
-      // 3. Ticket Kanalını Kategori Altında Oluştur
       const ticketChannel = await guild.channels.create({
         name: channelName,
         type: ChannelType.GuildText,
@@ -2131,7 +2462,7 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.showModal(modal);
     }
 
-    // Form Gönderildiğinde -> KATEGORİ ALTINDA TICKET AÇMA (Sınırsız Yetkili İzni İle)
+    // Form Gönderildiğinde -> KATEGORİ ALTINDA TICKET AÇMA
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_clan_apply_')) {
       const data = loadData();
       const applicant = interaction.user;
@@ -2154,17 +2485,14 @@ client.on('interactionCreate', async (interaction) => {
 
       await interaction.deferReply({ ephemeral: true });
 
-      // 1. Kategoriyi Kesinlikle Bul ('・ Destek' veya ayarlanan kategori)
       const targetCategory = await getOrCreateApplyCategory(guild);
 
-      // 2. İzinleri Hazırla (@everyone kapalı, aday açık, bot açık)
       const permissionOverwrites = [
         { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         { id: applicant.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
         { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
       ];
 
-      // Sınırsız Kayıtlı Yetkili Rollerini Odaya Ekle
       const staffRoleIds = data.staffRoleIds || [];
       staffRoleIds.forEach(roleId => {
         const r = guild.roles.cache.get(roleId);
@@ -2176,7 +2504,6 @@ client.on('interactionCreate', async (interaction) => {
         }
       });
 
-      // 3. Odayı Kategori Altında Oluştur
       const applyTicketChannel = await guild.channels.create({
         name: channelName,
         type: ChannelType.GuildText,
@@ -2257,7 +2584,6 @@ client.on('interactionCreate', async (interaction) => {
       const roleIdToUse = (clanRoleId && clanRoleId !== 'none') ? clanRoleId : data.clanRoleId;
       const clanRole = interaction.guild.roles.cache.get(roleIdToUse) || interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('klan üye'));
 
-      // 1. Klan Üye Rolünü Ver
       if (applicant && clanRole) {
         await applicant.roles.add(clanRole).catch(() => {});
         try {
@@ -2267,11 +2593,9 @@ client.on('interactionCreate', async (interaction) => {
         } catch (e) {}
       }
 
-      // 2. Yöneticilere Özel #temiz-log Kanalını Bul / Oluştur
       const guild = interaction.guild;
       const chCleanLog = await getOrCreateCleanLogChannel(guild);
 
-      // 3. #temiz-log Kanalına Detaylı Rapor Gönder
       if (chCleanLog) {
         const userObj = applicant ? applicant.user : { tag: 'Bilinmiyor', id: applicantId, displayAvatarURL: () => client.user.displayAvatarURL() };
 
@@ -2452,15 +2776,15 @@ client.on('interactionCreate', async (interaction) => {
 
         const results = [];
 
-        // 1. #🏆・turnuva-gelecek-olanlar
         let chTourney = await getOrCreateTourneyChannel(guild);
         results.push(`🏆 **#🏆・turnuva-gelecek-olanlar** kanalı hazır: ${chTourney}`);
 
-        // 2. Fotoğraftaki '・ Destek' Kategorisi
+        let chAboneLog = await getOrCreateAboneLogChannel(guild);
+        results.push(`🔴 **#🌌・abone-kanit** kanalı hazır: ${chAboneLog}`);
+
         let applyCat = await getOrCreateApplyCategory(guild);
         results.push(`📁 **Kategori:** ${applyCat.name}`);
 
-        // 3. #klan-başvuru & #başvuru-log
         let chApply = channels.find(c => c.name.includes('klan-başvuru') || c.name.includes('basvuru'));
         if (!chApply) {
           chApply = await guild.channels.create({
@@ -2474,11 +2798,9 @@ client.on('interactionCreate', async (interaction) => {
           results.push(`📁 **#klan-başvuru** kanalı oluşturuldu: ${chApply}`);
         }
 
-        // 4. Yönetici Özel #temiz-log Kanalı
         let chCleanLog = await getOrCreateCleanLogChannel(guild);
         results.push(`🔒 **#✅・temiz-log** kanalı hazır: ${chCleanLog}`);
 
-        // 5. Yönetici Özel #hile-log Kanalı
         let chCheatLog = await getOrCreateCheatLogChannel(guild);
         results.push(`🔒 **#🚫・hile-log** kanalı hazır: ${chCheatLog}`);
 
@@ -2520,7 +2842,6 @@ client.on('interactionCreate', async (interaction) => {
           results.push(`✅ **Klan Başvuru Paneli** kuruldu: ${chApply}`);
         }
 
-        // 6. #doğrulama
         let chVerify = channels.find(c => c.name.includes('doğrulama') || c.name.includes('dogrulama') || c.name.includes('kayıt') || c.name.includes('giris'));
         if (!chVerify) {
           chVerify = await guild.channels.create({
@@ -2552,7 +2873,6 @@ client.on('interactionCreate', async (interaction) => {
           results.push(`✅ **Doğrulama Paneli** kuruldu: ${chVerify}`);
         }
 
-        // 7. #destek-talebi
         let chTicket = channels.find(c => c.name.includes('destek') || c.name.includes('ticket'));
         if (!chTicket) {
           chTicket = await guild.channels.create({
@@ -2598,7 +2918,6 @@ client.on('interactionCreate', async (interaction) => {
           results.push(`✅ **Kategorili Destek Paneli** kuruldu: ${chTicket}`);
         }
 
-        // 8. #ceza-kayıt-log
         let chPunishLog = channels.find(c => c.name.includes('ceza-kayıt') || c.name.includes('ceza-log') || c.name.includes('moderasyon-log'));
         if (!chPunishLog) {
           chPunishLog = await guild.channels.create({
@@ -2898,7 +3217,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ==========================================
-// 6. KESİNTİSİZ ÇALIŞMA (CRASH KORUMASI)
+// 7. KESİNTİSİZ ÇALIŞMA (CRASH KORUMASI)
 // ==========================================
 process.on('unhandledRejection', (reason, promise) => {
   console.error('⚠️ [Hata Yakalandı - UnhandledRejection]:', reason);
@@ -2909,7 +3228,7 @@ process.on('uncaughtException', (err, origin) => {
 });
 
 // ==========================================
-// 7. GİRİŞ YAPMA (LOGIN)
+// 8. GİRİŞ YAPMA (LOGIN)
 // ==========================================
 if (!process.env.TOKEN) {
   console.warn('⚠️ DİKKAT: TOKEN bulunamadı!');
