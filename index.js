@@ -81,10 +81,10 @@ const commands = [
     .setDescription('Sunucuyu analiz eder, eksik kanalları/panelleri tespit edip tek tıkla otomatik kurar.')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-  // 3. /turnuva-duyuru (ÖZEL TURNUVA & ETKİNLİK SİSTEMİ)
+  // 3. /turnuva-duyuru
   new SlashCommandBuilder()
     .setName('turnuva-duyuru')
-    .setDescription('Ödüllü klan turnuvası, Trap/PvP eventi veya telafi duyurusu yayınlar.')
+    .setDescription('Turnuva duyurusu yayınlar, otomatik #🏆・turnuva-gelecek-olanlar kanalını kurar ve IGN toplar.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(option =>
       option.setName('etkinlik_adi')
@@ -555,8 +555,8 @@ client.on('interactionCreate', async (interaction) => {
           .setDescription('Vyron klanı ve topluluğu için gelişmiş yönetim sistemi:')
           .addFields(
             {
-              name: '🏆 Turnuva, Event & Duyurular',
-              value: '• `/turnuva-duyuru` : Katılım sayaçlı, IP ve ödül detaylı telafi & turnuva duyurusu.\n• `/duyuru` : Efektli, temalı ve göz alıcı epik klan duyuruları yayınlar.'
+              name: '🏆 Turnuva, Event & IGN Kayıt',
+              value: '• `/turnuva-duyuru` : Katılım sayaçlı, Minecraft IGN toplayan ve `#🏆・turnuva-gelecek-olanlar` kanalına listeleyen turnuva sistemi.\n• `/duyuru` : Efektli, temalı ve göz alıcı epik klan duyuruları yayınlar.'
             },
             {
               name: '🔍 Sunucu Denetimi & Otomatik Kurulum',
@@ -564,7 +564,7 @@ client.on('interactionCreate', async (interaction) => {
             },
             {
               name: '⚔️ Klan & Alım Sistemleri',
-              value: '• `/basvuru-kur` : Seçtiğin yetkili rollerinin bakabileceği özel ticketlı klan alım paneli.\n• `/haftanin-oyuncusu` : Haftanın Trapcisi veya Elytracısı unvanını verir ve duyurur.\n• `/scrim` : Otomatik takım bölen klan içi maç lobisi açar.\n• `/klan-rutbe` : Has Klan Üyesi yapar veya klandan çıkarır.'
+              value: '• `/basvuru-kur` : Anydesk kontrolü, doğrudan bilgisayardan atılan SS kanıtı ve `#kont-edilenler` loglu başvuru paneli.\n• `/haftanin-oyuncusu` : Haftanın Trapcisi veya Elytracısı unvanını verir ve duyurur.\n• `/scrim` : Otomatik takım bölen klan içi maç lobisi açar.\n• `/klan-rutbe` : Has Klan Üyesi yapar veya klandan çıkarır.'
             },
             {
               name: '🛡️ Güvenlik & Moderasyon',
@@ -585,8 +585,10 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
       }
 
-      // 2. /turnuva-duyuru (ÖZEL TURNUVA & ETKİNLİK DUYURUSU)
+      // 2. /turnuva-duyuru
       if (commandName === 'turnuva-duyuru') {
+        await interaction.deferReply({ ephemeral: true });
+
         const eventName = interaction.options.getString('etkinlik_adi');
         const dateTime = interaction.options.getString('tarih_saat');
         const prize = interaction.options.getString('odul');
@@ -595,13 +597,48 @@ client.on('interactionCreate', async (interaction) => {
         const extraNote = interaction.options.getString('aciklama') || 'Dün eklenti (plugin) kaynaklı yaşanan aksaklık nedeniyle ertelenen Trap Turnuvamız, bu akşam telafi ödülleriyle birlikte bomba gibi gerçekleşiyor! Tüm savaşçılarımızı bekliyoruz.';
         const pingEveryone = interaction.options.getBoolean('herkese_etiket') ?? true;
 
+        const guild = interaction.guild;
+
+        let attendeesChannel = guild.channels.cache.find(c =>
+          c.name.includes('turnuva-gelecek') || c.name.includes('turnuva-katilim') || c.name.includes('etkinlik-katilim')
+        );
+
+        if (!attendeesChannel) {
+          attendeesChannel = await guild.channels.create({
+            name: '🏆・turnuva-gelecek-olanlar',
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              {
+                id: guild.roles.everyone.id,
+                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+                deny: [PermissionFlagsBits.SendMessages]
+              },
+              {
+                id: client.user.id,
+                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks]
+              }
+            ]
+          });
+
+          const welcomeListEmbed = new EmbedBuilder()
+            .setColor('#F59E0B')
+            .setTitle('🏆 VYRON KLAN TURNUVASI - KATILIMCI LİSTESİ')
+            .setDescription(
+              `Bu kanalda turnuvaya katılacak tüm üyeler ve **Minecraft IGN** bilgileri bot tarafından otomatik listelenir.\n\n` +
+              `👇 Katılmak için ${targetChannel} kanalındaki **"⚔️ Turnuvaya Katıl (IGN Yaz)"** butonuna basınız!`
+            )
+            .setFooter({ text: FOOTER_TEXT });
+
+          await attendeesChannel.send({ embeds: [welcomeListEmbed] });
+        }
+
         const eventId = `event_${Date.now()}`;
 
         const tournamentEmbed = new EmbedBuilder()
           .setColor('#F59E0B')
           .setAuthor({
-            name: `${interaction.guild.name} • RESMİ KLAN ETKİNLİĞİ & TURNUVA`,
-            iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL()
+            name: `${guild.name} • RESMİ KLAN ETKİNLİĞİ & TURNUVA`,
+            iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL()
           })
           .setTitle(`🏆 〖 ${eventName.toUpperCase()} 〗 🏆`)
           .setDescription(
@@ -616,15 +653,16 @@ client.on('interactionCreate', async (interaction) => {
             { name: '🌐 Sunucu IP Adresi', value: `🎮 \`${serverIp}\``, inline: true },
             { name: '🎁 Büyük Turnuva Ödülü', value: `💎 **${prize}**`, inline: false },
             { name: '🚪 Oyunda Katılım Komutu', value: '💡 `/event join` *(Zamanı gelince oyunda yazınız)*', inline: true },
+            { name: '📋 Kayıtlı Katılımcı Listesi', value: `${attendeesChannel}`, inline: true },
             { name: '👑 Düzenleyen Yetkili', value: `${interaction.user}`, inline: true }
           )
-          .setFooter({ text: `0 Katılımcı • ${FOOTER_TEXT}` })
+          .setFooter({ text: `0 Katılımcı Kayıtlı • ${FOOTER_TEXT}` })
           .setTimestamp();
 
         const eventRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId(`event_attend_${eventId}`)
-            .setLabel('⚔️ Turnuvaya Katılacağım! (0)')
+            .setCustomId(`btn_tourney_register_${eventId}`)
+            .setLabel('⚔️ Turnuvaya Katıl (IGN Yaz)')
             .setStyle(ButtonStyle.Success)
             .setEmoji('🔥')
         );
@@ -643,13 +681,13 @@ client.on('interactionCreate', async (interaction) => {
           eventId,
           channelId: targetChannel.id,
           messageId: sentMsg.id,
+          attendeesChannelId: attendeesChannel.id,
           eventName,
-          attendees: new Set()
+          attendees: new Map()
         });
 
-        return interaction.reply({
-          content: `✅ Turnuva duyurusu başarıyla ${targetChannel} kanalına yayınlandı! 🏆🔥`,
-          ephemeral: true
+        return interaction.editReply({
+          content: `✅ **Turnuva duyurusu ${targetChannel} kanalına yayınlandı!**\n📋 Katılanların Minecraft adlarının listeleneceği kanal: ${attendeesChannel}`
         });
       }
 
@@ -682,6 +720,7 @@ client.on('interactionCreate', async (interaction) => {
         const chApplyLog = channels.find(c => c.name.includes('başvuru-log') || c.name.includes('basvuru-log'));
         const chVerify = channels.find(c => c.name.includes('doğrulama') || c.name.includes('dogrulama') || c.name.includes('kayıt') || c.name.includes('giris'));
         const chTicket = channels.find(c => c.name.includes('destek') || c.name.includes('ticket'));
+        const chKont = channels.find(c => c.name.includes('kont-edilen') || c.name.includes('kont-alinan') || c.name.includes('kont-log'));
         const chPunishLog = channels.find(c => c.name.includes('ceza-kayıt') || c.name.includes('ceza-log') || c.name.includes('moderasyon-log'));
 
         const actionItems = [];
@@ -690,6 +729,12 @@ client.on('interactionCreate', async (interaction) => {
           actionItems.push(`• **Klan Başvuru Kanalı:** ${chApply} (Mevcut)`);
         } else {
           actionItems.push('• ❌ **#klan-başvuru** kanalı yok (Otomatik oluşturulacak)');
+        }
+
+        if (chKont) {
+          actionItems.push(`• **Kontrol Edilenler Log:** ${chKont} (Mevcut)`);
+        } else {
+          actionItems.push('• ❌ **#kont-edilenler** kanalı yok (Otomatik oluşturulacak)');
         }
 
         if (chVerify) {
@@ -734,7 +779,7 @@ client.on('interactionCreate', async (interaction) => {
             },
             {
               name: '🔍 Tespit Edilen Mevcut Kanallar',
-              value: `• **Klan Başvuru:** ${chApply ? `✅ ${chApply}` : '❌ Yok (Açılacak)'}\n• **Başvuru Log:** ${chApplyLog ? `✅ ${chApplyLog}` : '❌ Yok (Açılacak)'}\n• **Doğrulama:** ${chVerify ? `✅ ${chVerify}` : '❌ Yok (Açılacak)'}\n• **Destek:** ${chTicket ? `✅ ${chTicket}` : '❌ Yok (Açılacak)'}\n• **Ceza Log:** ${chPunishLog ? `✅ ${chPunishLog}` : '❌ Yok (Açılacak)'}`,
+              value: `• **Klan Başvuru:** ${chApply ? `✅ ${chApply}` : '❌ Yok'}\n• **Kontrol Edilenler Log:** ${chKont ? `✅ ${chKont}` : '❌ Yok (Açılacak)'}\n• **Başvuru Log:** ${chApplyLog ? `✅ ${chApplyLog}` : '❌ Yok'}\n• **Doğrulama:** ${chVerify ? `✅ ${chVerify}` : '❌ Yok'}\n• **Destek:** ${chTicket ? `✅ ${chTicket}` : '❌ Yok'}`,
               inline: false
             },
             {
@@ -1424,6 +1469,107 @@ client.on('interactionCreate', async (interaction) => {
     // ----------------------------------------------------
     // B. MODAL AÇMA & GÖNDERME
     // ----------------------------------------------------
+    // 1. Turnuva Katılım Modalı Açma
+    if (interaction.isButton() && interaction.customId.startsWith('btn_tourney_register_')) {
+      const eventId = interaction.customId.replace('btn_tourney_register_', '');
+
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_tourney_reg_${eventId}`)
+        .setTitle('🏆 Turnuva Katılım & IGN Kaydı');
+
+      const inputIgn = new TextInputBuilder()
+        .setCustomId('mc_ign')
+        .setLabel('Minecraft Oyun İçi Nickiniz (IGN):')
+        .setPlaceholder('Örn: VyronSavasci_PvP')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      const inputClass = new TextInputBuilder()
+        .setCustomId('player_class')
+        .setLabel('PvP / Trap / Elytra Rolünüz:')
+        .setPlaceholder('Örn: Trapci / Elytracı / Tank')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(inputIgn),
+        new ActionRowBuilder().addComponents(inputClass)
+      );
+
+      return interaction.showModal(modal);
+    }
+
+    // 2. Turnuva Modalı Gönderildiğinde
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_tourney_reg_')) {
+      const eventId = interaction.customId.replace('modal_tourney_reg_', '');
+      const eventData = activeEvents.get(eventId);
+
+      const ign = interaction.fields.getTextInputValue('mc_ign').trim();
+      const playerClass = interaction.fields.getTextInputValue('player_class') || 'Savaşçı';
+      const user = interaction.user;
+      const guild = interaction.guild;
+
+      let attendeesChannel = null;
+      if (eventData && eventData.attendeesChannelId) {
+        attendeesChannel = guild.channels.cache.get(eventData.attendeesChannelId);
+      }
+      if (!attendeesChannel) {
+        attendeesChannel = guild.channels.cache.find(c => c.name.includes('turnuva-gelecek') || c.name.includes('turnuva-katilim'));
+      }
+
+      let attendeeIndex = 1;
+      if (eventData) {
+        eventData.attendees.set(user.id, { ign, playerClass, time: Date.now() });
+        attendeeIndex = eventData.attendees.size;
+      }
+
+      if (attendeesChannel) {
+        const attendeeEmbed = new EmbedBuilder()
+          .setColor('#10B981')
+          .setAuthor({ name: `${user.tag} Turnuvaya Katılıyor!`, iconURL: user.displayAvatarURL({ dynamic: true }) })
+          .setTitle(`⚔️ Katılımcı Kaydı: #${String(attendeeIndex).padStart(2, '0')}`)
+          .addFields(
+            { name: '👤 Discord Üyesi', value: `${user} (\`${user.tag}\`)`, inline: true },
+            { name: '🎮 Minecraft IGN', value: `\`${ign}\``, inline: true },
+            { name: '🛡️ Uzmanlık / Rol', value: `${playerClass}`, inline: true },
+            { name: '⏰ Kayıt Tarihi', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: false }
+          )
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        await attendeesChannel.send({ embeds: [attendeeEmbed] }).catch(() => {});
+      }
+
+      if (eventData) {
+        try {
+          const mainChannel = guild.channels.cache.get(eventData.channelId);
+          if (mainChannel) {
+            const mainMsg = await mainChannel.messages.fetch(eventData.messageId).catch(() => null);
+            if (mainMsg && mainMsg.embeds.length > 0) {
+              const updatedEmbed = EmbedBuilder.from(mainMsg.embeds[0])
+                .setFooter({ text: `${attendeeIndex} Katılımcı Kayıtlı • ${FOOTER_TEXT}` });
+
+              const updatedRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setCustomId(`btn_tourney_register_${eventId}`)
+                  .setLabel(`⚔️ Turnuvaya Katıl (${attendeeIndex})`)
+                  .setStyle(ButtonStyle.Success)
+                  .setEmoji('🔥')
+              );
+
+              await mainMsg.edit({ embeds: [updatedEmbed], components: [updatedRow] }).catch(() => {});
+            }
+          }
+        } catch (e) {}
+      }
+
+      return interaction.reply({
+        content: `🎉 **Turnuva kaydınız başarıyla alındı!**\n🎮 **Minecraft Nickiniz:** \`${ign}\`\n📋 İsminiz ${attendeesChannel || 'turnuva listesi kanalına'} eklendi!`,
+        ephemeral: true
+      });
+    }
+
+    // 3. Klan Başvuru Modalı Açma
     if (interaction.isButton() && interaction.customId.startsWith('btn_open_apply_')) {
       const configKey = interaction.customId.replace('btn_open_apply_', '');
 
@@ -1477,7 +1623,7 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.showModal(modal);
     }
 
-    // Form Gönderildiğinde -> SEÇİLEN YETKİLİ ROLLERİYLE TICKET AÇMA
+    // Form Gönderildiğinde -> TICKET AÇMA
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_clan_apply_')) {
       const configKey = interaction.customId.replace('modal_clan_apply_', '');
       const config = applyConfigs.get(configKey) || {};
@@ -1554,13 +1700,13 @@ client.on('interactionCreate', async (interaction) => {
           .setStyle(ButtonStyle.Primary)
           .setEmoji('🖥️'),
         new ButtonBuilder()
-          .setCustomId(`ticket_pass_${applicant.id}_${clanRoleId || 'none'}`)
-          .setLabel('✅ Temiz (Klan Rolü Ver)')
+          .setCustomId(`ticket_pass_modal_${applicant.id}_${clanRoleId || 'none'}`)
+          .setLabel('✅ Temiz (Bitir & Logla)')
           .setStyle(ButtonStyle.Success)
           .setEmoji('🛡️'),
         new ButtonBuilder()
           .setCustomId(`ticket_fail_modal_${applicant.id}`)
-          .setLabel('🚫 Hile Çıktı (Reddet)')
+          .setLabel('🚫 Hile Çıktı (SS & Reddet)')
           .setStyle(ButtonStyle.Danger),
         new ButtonBuilder()
           .setCustomId(`ticket_reject_close_${applicant.id}`)
@@ -1599,42 +1745,162 @@ client.on('interactionCreate', async (interaction) => {
       });
     }
 
-    // Hile Sebebi Modal Formu
+    // 4. TEMİZ KONTROL MODAL GÖNDERİLDİĞİNDE
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_pass_confirm_')) {
+      const parts = interaction.customId.split('_');
+      const applicantId = parts[3];
+      const clanRoleId = parts[4];
+
+      const checkNotes = interaction.fields.getTextInputValue('pass_notes') || 'Anydesk kontrolü yapıldı, temiz.';
+
+      const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
+      const clanRole = interaction.guild.roles.cache.get(clanRoleId) || interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('klan üye'));
+
+      // Rolü Ver
+      if (applicant && clanRole) {
+        await applicant.roles.add(clanRole).catch(() => {});
+        try {
+          await applicant.send({
+            content: `🎉 **Tebrikler ${applicant.user.username}!** Vyron klanımızın Anydesk kontrolünden başarıyla geçtiniz ve **${clanRole.name}** rolünüz tanımlandı. Klana hoş geldiniz! ⚔️`
+          });
+        } catch (e) {}
+      }
+
+      // #kont-edilenler Kanalını Bul veya Oluştur
+      const guild = interaction.guild;
+      let chKont = guild.channels.cache.find(c =>
+        c.name.includes('kont-edilen') || c.name.includes('kont-alinan') || c.name.includes('kont-log') || c.name.includes('kontrol-log')
+      );
+
+      if (!chKont) {
+        chKont = await guild.channels.create({
+          name: 'kont-edilenler',
+          type: ChannelType.GuildText,
+          permissionOverwrites: [
+            { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageChannels] },
+            { id: interaction.member.roles.highest.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+          ]
+        });
+      }
+
+      // Kanala atılan son görseli tara (varsa)
+      let finalProofUrl = null;
+      const recentMessages = await interaction.channel.messages.fetch({ limit: 15 }).catch(() => null);
+      if (recentMessages) {
+        const imgMsg = recentMessages.find(m => m.attachments.size > 0);
+        if (imgMsg) finalProofUrl = imgMsg.attachments.first().url;
+      }
+
+      // Kont Edilenler Kanalına Gönder
+      if (chKont) {
+        const passLogEmbed = new EmbedBuilder()
+          .setColor('#10B981')
+          .setTitle('✅ KLAN KONTROLÜ BAŞARILI (TEMİZ)')
+          .addFields(
+            { name: '👤 Kont Edilen Üye', value: `${applicant ? applicant : applicantId} (\`${applicantId}\`)`, inline: true },
+            { name: '🛡️ Kontrol Eden Yetkili', value: `${interaction.user} (\`${interaction.user.tag}\`)`, inline: true },
+            { name: '🏷️ Verilen Rol', value: `${clanRole ? clanRole.name : 'Klan Üyesi'}`, inline: true },
+            { name: '📝 Yetkili Notu', value: `>>> ${checkNotes}`, inline: false }
+          )
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        if (finalProofUrl) {
+          passLogEmbed.setImage(finalProofUrl);
+        }
+
+        await chKont.send({ embeds: [passLogEmbed] }).catch(() => {});
+      }
+
+      const passEmbed = new EmbedBuilder()
+        .setColor('#10B981')
+        .setTitle('🎉 Kontrol Başarılı - Klana Alındı!')
+        .setDescription(`Tebrikler ${applicant}! Anydesk kontrolünden **TEMİZ** olarak geçti, rolü verildi ve rapor **${chKont}** kanalına iletildi!\n\n🔒 Bu başvuru odası 5 saniye içinde kapatılacaktır.`)
+        .setFooter({ text: FOOTER_TEXT });
+
+      await interaction.reply({ embeds: [passEmbed] });
+
+      setTimeout(async () => {
+        await interaction.channel.delete().catch(() => {});
+      }, 5000);
+      return;
+    }
+
+    // 5. HİLE KONTROL MODAL GÖNDERİLDİĞİNDE (KANALDAN DİREKT SS ALIR - URL YOK)
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_cheat_reason_')) {
       const applicantId = interaction.customId.split('_')[3];
       const cheatType = interaction.fields.getTextInputValue('cheat_type');
-      const cheatNotes = interaction.fields.getTextInputValue('cheat_notes') || 'Ek not girilmedi.';
+      const cheatNotes = interaction.fields.getTextInputValue('cheat_notes') || 'Belirtilmedi.';
+
+      // Kanala doğrudan yüklenen (Ctrl + V veya dosya seçerek atılan) resmi tara
+      let finalSsUrl = null;
+      const recentMessages = await interaction.channel.messages.fetch({ limit: 25 }).catch(() => null);
+      if (recentMessages) {
+        const imgMsg = recentMessages.find(m => m.attachments.size > 0);
+        if (imgMsg) {
+          finalSsUrl = imgMsg.attachments.first().url;
+        }
+      }
+
+      // SS Kanıtı Yoksa Net ve Açıklayıcı Uyarı Ver
+      if (!finalSsUrl) {
+        return interaction.reply({
+          content: '⚠️ **HATA: Hile tespitinde SS (Ekran Görüntüsü / Kanıt) zorunludur!**\n\n📌 **Lütfen bilgisayarınızdaki hile kanıtı resmini doğrudan bu kanala yükleyin / yapıştırın (`Ctrl + V`), ardından butona tekrar basın!**',
+          ephemeral: true
+        });
+      }
 
       const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
 
       if (applicant) {
         try {
           await applicant.send({
-            content: `🚫 Merhaba, Vyron klan başvurunuz Anydesk kontrolü sonucunda **Hile / İhlal (${cheatType})** nedeniyle reddedilmiştir.`
+            content: `🚫 Merhaba, Vyron klan başvurunuz Anydesk kontrolü sonucunda **Hile / İhlal (${cheatType})** tespiti nedeniyle reddedilmiştir.`
           });
         } catch (e) {}
       }
 
-      const logChannel = interaction.guild.channels.cache.find(c => c.name.includes('ceza-kayıt') || c.name.includes('başvuru-log'));
-      if (logChannel) {
+      // #kont-edilenler Kanalını Bul veya Oluştur
+      const guild = interaction.guild;
+      let chKont = guild.channels.cache.find(c =>
+        c.name.includes('kont-edilen') || c.name.includes('kont-alinan') || c.name.includes('kont-log') || c.name.includes('kontrol-log')
+      );
+
+      if (!chKont) {
+        chKont = await guild.channels.create({
+          name: 'kont-edilenler',
+          type: ChannelType.GuildText,
+          permissionOverwrites: [
+            { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageChannels] },
+            { id: interaction.member.roles.highest.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+          ]
+        });
+      }
+
+      // #kont-edilenler Kanalına Kanıtlı Rapor Gönder
+      if (chKont) {
         const cheatEmbed = new EmbedBuilder()
           .setColor('#EF4444')
-          .setTitle('🚫 Kontrolde Hile Tespit Edildi!')
+          .setTitle('🚫 KONTROLDE HİLE TESPİT EDİLDİ!')
           .addFields(
-            { name: '👤 Aday', value: `${applicant ? applicant.user.tag : applicantId} (\`${applicantId}\`)`, inline: true },
-            { name: '🛡️ Kontrol Eden', value: `${interaction.user.tag}`, inline: true },
+            { name: '👤 Kont Edilen Oyuncu', value: `${applicant ? applicant : applicantId} (\`${applicantId}\`)`, inline: true },
+            { name: '🛡️ Kontrol Eden Yetkili', value: `${interaction.user} (\`${interaction.user.tag}\`)`, inline: true },
             { name: '⚠️ Tespit Edilen Hile', value: `**${cheatType}**`, inline: true },
-            { name: '📄 Detay / Not', value: `>>> ${cheatNotes}`, inline: false }
+            { name: '📄 Yetkili Açıklaması / Detay', value: `>>> ${cheatNotes}`, inline: false }
           )
+          .setImage(finalSsUrl)
           .setFooter({ text: FOOTER_TEXT })
           .setTimestamp();
-        await logChannel.send({ embeds: [cheatEmbed] }).catch(() => {});
+
+        await chKont.send({ embeds: [cheatEmbed] }).catch(() => {});
       }
 
       const failEmbed = new EmbedBuilder()
         .setColor('#EF4444')
-        .setTitle('🚫 Kontrol Başarısız (Hile Tespit Edildi)')
-        .setDescription(`${applicant ? applicant.user.tag : 'Aday'} klan kontrolünden geçemedi.\n**Sebep:** ${cheatType}\n\n🔒 Bu oda 5 saniye içinde kapatılacaktır.`)
+        .setTitle('🚫 Kontrol Başarısız (Hile Tespit Edildi & Raporlandı)')
+        .setDescription(`${applicant ? applicant.user.tag : 'Aday'} kontrolden elendi.\n**Hile:** ${cheatType}\n📸 Kanıt SS'i **${chKont}** kanalına aktarıldı.\n\n🔒 Bu oda 5 saniye içinde kapatılacaktır.`)
         .setFooter({ text: FOOTER_TEXT });
 
       await interaction.reply({ embeds: [failEmbed] });
@@ -1651,52 +1917,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       const customId = interaction.customId;
 
-      // 1. TURNUVAYA KATILIM BUTONU (CANLI SAYAÇ)
-      if (customId.startsWith('event_attend_')) {
-        const eventId = customId.replace('event_attend_', '');
-        const eventData = activeEvents.get(eventId);
-
-        if (!eventData) {
-          return interaction.reply({ content: 'ℹ️ Bu etkinlik duyurusu daha önceki bir oturuma ait.', ephemeral: true });
-        }
-
-        const userId = interaction.user.id;
-        let joined = false;
-
-        if (eventData.attendees.has(userId)) {
-          eventData.attendees.delete(userId);
-          joined = false;
-        } else {
-          eventData.attendees.add(userId);
-          joined = true;
-        }
-
-        const attendeeCount = eventData.attendees.size;
-
-        const updatedRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`event_attend_${eventId}`)
-            .setLabel(`⚔️ Turnuvaya Katılacağım! (${attendeeCount})`)
-            .setStyle(ButtonStyle.Success)
-            .setEmoji('🔥')
-        );
-
-        if (interaction.message.embeds && interaction.message.embeds.length > 0) {
-          const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-            .setFooter({ text: `${attendeeCount} Katılımcı Kayıtlı • ${FOOTER_TEXT}` });
-
-          await interaction.message.edit({ embeds: [updatedEmbed], components: [updatedRow] }).catch(() => {});
-        }
-
-        return interaction.reply({
-          content: joined
-            ? `🔥 **Harika!** Turnuva katılım listenize eklendiniz! Saatinde sunucuda olmayı unutmayın! ⚔️`
-            : `⚠️ Turnuva katılım kaydınızı geri çektiniz.`,
-          ephemeral: true
-        });
-      }
-
-      // 2. ANKET OYLAMA
+      // 1. ANKET OYLAMA
       if (customId.startsWith('poll_vote_yes_') || customId.startsWith('poll_vote_no_')) {
         const isYes = customId.startsWith('poll_vote_yes_');
         const pollId = customId.replace('poll_vote_yes_', '').replace('poll_vote_no_', '');
@@ -1753,7 +1974,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `🗳️ ${userAction}`, ephemeral: true });
       }
 
-      // 3. OTOMATİK EKSİK KANALLARI OLUŞTURMA VE PANELLERİ KURMA BUTONU
+      // 2. OTOMATİK EKSİK KANALLARI OLUŞTURMA VE PANELLERİ KURMA BUTONU
       if (customId.startsWith('btn_autofix_missing_')) {
         const guildId = customId.replace('btn_autofix_missing_', '');
         const guild = client.guilds.cache.get(guildId) || interaction.guild || client.guilds.cache.first();
@@ -1790,6 +2011,21 @@ client.on('interactionCreate', async (interaction) => {
             ]
           });
           results.push(`📁 **#klan-başvuru** kanalı oluşturuldu: ${chApply}`);
+        }
+
+        // #kont-edilenler Kanalı
+        let chKont = channels.find(c => c.name.includes('kont-edilen') || c.name.includes('kont-alinan') || c.name.includes('kont-log'));
+        if (!chKont) {
+          chKont = await guild.channels.create({
+            name: 'kont-edilenler',
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+              { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+              { id: member.roles.highest.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+            ]
+          });
+          results.push(`🔒 **#kont-edilenler** kanalı oluşturuldu: ${chKont}`);
         }
 
         let chApplyLog = channels.find(c => c.name.includes('başvuru-log') || c.name.includes('basvuru-log'));
@@ -1923,7 +2159,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.editReply({ embeds: [completionEmbed] });
       }
 
-      // 4. ANYDESK KONTROLE ÇAĞIR BUTONU
+      // 3. ANYDESK KONTROLE ÇAĞIR BUTONU
       if (customId.startsWith('ticket_call_anydesk_')) {
         const applicantId = customId.split('_')[3];
 
@@ -1954,11 +2190,11 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ ${applicant} başarıyla Anydesk kontrolüne çağrıldı ve DM bildirimi iletildi!`, ephemeral: true });
       }
 
-      // 5. KLAN BAŞVURU TICKET: TEMİZ (ROL VER & SADECE DM AT)
-      if (customId.startsWith('ticket_pass_')) {
+      // 4. KLAN BAŞVURU TICKET: TEMİZ MODAL AÇ
+      if (customId.startsWith('ticket_pass_modal_')) {
         const parts = customId.split('_');
-        const applicantId = parts[2];
-        const clanRoleId = parts[3];
+        const applicantId = parts[3];
+        const clanRoleId = parts[4];
 
         if (interaction.user.id === applicantId) {
           return interaction.reply({ content: '❌ Kendi başvurunuzu onaylayamazsınız!', ephemeral: true });
@@ -1970,33 +2206,25 @@ client.on('interactionCreate', async (interaction) => {
           return interaction.reply({ content: '❌ Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
         }
 
-        const applicant = await interaction.guild.members.fetch(applicantId).catch(() => null);
-        const clanRole = interaction.guild.roles.cache.get(clanRoleId) || interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('klan üye'));
+        const modal = new ModalBuilder()
+          .setCustomId(`modal_pass_confirm_${applicantId}_${clanRoleId}`)
+          .setTitle('✅ Temiz Kontrol Onayı');
 
-        if (applicant && clanRole) {
-          await applicant.roles.add(clanRole).catch(() => {});
-          try {
-            await applicant.send({
-              content: `🎉 **Tebrikler ${applicant.user.username}!** Vyron klanımızın Anydesk kontrolünden başarıyla geçtiniz ve **${clanRole.name}** rolünüz tanımlandı. Klana hoş geldiniz! ⚔️`
-            });
-          } catch (e) {}
-        }
+        const inputNotes = new TextInputBuilder()
+          .setCustomId('pass_notes')
+          .setLabel('Kontrol Notu & Açıklama:')
+          .setPlaceholder('Örn: Anydesk kontrolü yapıldı, tamamen temiz.')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false);
 
-        const passEmbed = new EmbedBuilder()
-          .setColor('#10B981')
-          .setTitle('🎉 Kontrol Başarılı - Klana Alındı!')
-          .setDescription(`Tebrikler ${applicant}! Anydesk kontrolünden **TEMİZ** olarak geçti ve **${clanRole ? clanRole.name : 'Klan Üyesi'}** rolü verildi!\n\n🔒 Bu başvuru odası 5 saniye içinde kapatılacaktır.`)
-          .setFooter({ text: FOOTER_TEXT });
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(inputNotes)
+        );
 
-        await interaction.reply({ embeds: [passEmbed] });
-
-        setTimeout(async () => {
-          await interaction.channel.delete().catch(() => {});
-        }, 5000);
-        return;
+        return interaction.showModal(modal);
       }
 
-      // 6. KLAN BAŞVURU TICKET: HİLE MODAL AÇ
+      // 5. KLAN BAŞVURU TICKET: HİLE MODAL AÇ (SS KANALDAN ALINIR - URL YOK)
       if (customId.startsWith('ticket_fail_modal_')) {
         const applicantId = customId.split('_')[3];
 
@@ -2012,7 +2240,7 @@ client.on('interactionCreate', async (interaction) => {
 
         const modal = new ModalBuilder()
           .setCustomId(`modal_cheat_reason_${applicantId}`)
-          .setTitle('🚫 Hile & İhlal Tespit Tutanağı');
+          .setTitle('🚫 Hile Tespiti & Tutanak');
 
         const inputCheatType = new TextInputBuilder()
           .setCustomId('cheat_type')
@@ -2023,10 +2251,10 @@ client.on('interactionCreate', async (interaction) => {
 
         const inputCheatNotes = new TextInputBuilder()
           .setCustomId('cheat_notes')
-          .setLabel('Ek Kanıt / Detay Notu (İsteğe bağlı):')
-          .setPlaceholder('Örn: %temp% dosyasında kalıntı bulundu.')
+          .setLabel('Hile Detayı / Açıklama:')
+          .setPlaceholder('Örn: %temp% ve prefetch klasöründe kalıntı bulundu.')
           .setStyle(TextInputStyle.Paragraph)
-          .setRequired(false);
+          .setRequired(true);
 
         modal.addComponents(
           new ActionRowBuilder().addComponents(inputCheatType),
@@ -2036,7 +2264,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.showModal(modal);
       }
 
-      // 7. KLAN BAŞVURU TICKET: REDDET & KAPAT
+      // 6. KLAN BAŞVURU TICKET: REDDET & KAPAT
       if (customId.startsWith('ticket_reject_close_')) {
         const applicantId = customId.split('_')[3];
 
@@ -2067,7 +2295,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      // 8. SCRIM KATILMA & AYRILMA
+      // 7. SCRIM KATILMA & AYRILMA
       if (customId.startsWith('scrim_join_') || customId.startsWith('scrim_leave_')) {
         const isJoin = customId.startsWith('scrim_join_');
         const parts = customId.split('_');
@@ -2138,7 +2366,7 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 9. ÇEKİLİŞE KATILMA
+      // 8. ÇEKİLİŞE KATILMA
       if (customId.startsWith('gw_join_')) {
         const giveawayId = customId.replace('gw_join_', '');
         const gw = activeGiveaways.get(giveawayId);
@@ -2172,7 +2400,7 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // 10. GENEL DESTEK TICKET OLUŞTURMA
+      // 9. GENEL DESTEK TICKET OLUŞTURMA
       if (customId.startsWith('ticket_create_')) {
         const parts = customId.split('_');
         const roleId = parts[2];
@@ -2222,7 +2450,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.editReply({ content: `✅ Destek talebiniz açıldı: ${ticketChannel}` });
       }
 
-      // 11. TICKET KAPATMA
+      // 10. TICKET KAPATMA
       if (customId === 'ticket_close_action') {
         await interaction.reply({ embeds: [new EmbedBuilder().setColor('#EF4444').setDescription('🔒 Destek talebi 5 saniye içinde kapatılacak...').setFooter({ text: FOOTER_TEXT })] });
         setTimeout(async () => {
@@ -2231,7 +2459,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      // 12. DOĞRULAMA
+      // 11. DOĞRULAMA
       if (customId.startsWith('verify_role_')) {
         const roleId = customId.replace('verify_role_', '');
         const role = interaction.guild.roles.cache.get(roleId);
