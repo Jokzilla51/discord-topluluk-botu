@@ -56,7 +56,6 @@ app.listen(PORT, () => {
 
 // ==========================================
 // 2. DISCORD CLIENT & BELLEK HAVUZLARI
-// (Disallowed Intents Hatasını Önleyen Standart Guilds Intent)
 // ==========================================
 const client = new Client({
   intents: [
@@ -72,15 +71,16 @@ const applyConfigs = new Map();
 let applicationCounter = 1;
 
 // ==========================================
-// YARDIMCI FONKSİYONLAR: ÖZEL LOG KANALLARI
-// (Sadece Yönetici İzni Olanlar Görebilir)
+// YARDIMCI FONKSİYONLAR: KANAL YÖNETİMİ
 // ==========================================
+
+// 1. Turnuva Katılımcı Listesi Kanalı (Herkes Görebilir, Sadece Bot Yazar)
 async function getOrCreateTourneyChannel(guild) {
   try {
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
     let ch = channels.find(c =>
       c && c.type === ChannelType.GuildText &&
-      (c.name.includes('turnuva-gelecek') || c.name.includes('turnuva-katilim') || c.name.includes('gelecek-olanlar'))
+      (c.name.includes('turnuva-gelecek') || c.name.includes('turnuva-katilim') || c.name.includes('turnuva-kayit') || c.name.includes('gelecek-olanlar'))
     );
 
     if (!ch) {
@@ -118,7 +118,7 @@ async function getOrCreateTourneyChannel(guild) {
   }
 }
 
-// 1. Sadece Yöneticilerin Görebileceği #temiz-log Kanalı
+// 2. Sadece Yöneticilerin Görebileceği #temiz-log Kanalı
 async function getOrCreateCleanLogChannel(guild) {
   try {
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
@@ -140,7 +140,7 @@ async function getOrCreateCleanLogChannel(guild) {
   }
 }
 
-// 2. Sadece Yöneticilerin Görebileceği #hile-log Kanalı
+// 3. Sadece Yöneticilerin Görebileceği #hile-log Kanalı
 async function getOrCreateCheatLogChannel(guild) {
   try {
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
@@ -860,7 +860,7 @@ client.on('interactionCreate', async (interaction) => {
 
         const channels = guild.channels.cache;
         const chApply = channels.find(c => c.name.includes('klan-başvuru') || c.name.includes('basvuru'));
-        const chApplyLog = channels.find(c => c.name.includes('başvuru-log') || c.name.includes('basvuru-log'));
+        const chTourney = channels.find(c => c.name.includes('turnuva-gelecek') || c.name.includes('turnuva-katilim') || c.name.includes('turnuva-kayit'));
         const chCleanLog = channels.find(c => c.name.includes('temiz-log') || c.name.includes('onay-log'));
         const chCheatLog = channels.find(c => c.name.includes('hile-log') || c.name.includes('kont-edilen') || c.name.includes('kont-log'));
         const chVerify = channels.find(c => c.name.includes('doğrulama') || c.name.includes('dogrulama') || c.name.includes('kayıt') || c.name.includes('giris'));
@@ -873,6 +873,12 @@ client.on('interactionCreate', async (interaction) => {
           actionItems.push(`• **Klan Başvuru Kanalı:** ${chApply} (Mevcut)`);
         } else {
           actionItems.push('• ❌ **#klan-başvuru** kanalı yok (Otomatik oluşturulacak)');
+        }
+
+        if (chTourney) {
+          actionItems.push(`• **Turnuva Katılımcı Listesi:** ${chTourney} (Mevcut)`);
+        } else {
+          actionItems.push('• 🏆 **#🏆・turnuva-gelecek-olanlar** kanalı yok (Otomatik oluşturulacak)');
         }
 
         if (chCleanLog) {
@@ -929,7 +935,7 @@ client.on('interactionCreate', async (interaction) => {
             },
             {
               name: '🔍 Tespit Edilen Log & Panel Kanalları',
-              value: `• **Klan Başvuru:** ${chApply ? `✅ ${chApply}` : '❌ Yok'}\n• **Temiz Log:** ${chCleanLog ? `✅ ${chCleanLog}` : '🔒 Yok (Açılacak)'}\n• **Hile Log:** ${chCheatLog ? `✅ ${chCheatLog}` : '🔒 Yok (Açılacak)'}\n• **Doğrulama:** ${chVerify ? `✅ ${chVerify}` : '❌ Yok'}\n• **Destek:** ${chTicket ? `✅ ${chTicket}` : '❌ Yok'}`,
+              value: `• **Turnuva Katılım:** ${chTourney ? `✅ ${chTourney}` : '❌ Yok (Açılacak)'}\n• **Klan Başvuru:** ${chApply ? `✅ ${chApply}` : '❌ Yok'}\n• **Temiz Log:** ${chCleanLog ? `✅ ${chCleanLog}` : '🔒 Yok (Açılacak)'}\n• **Hile Log:** ${chCheatLog ? `✅ ${chCheatLog}` : '🔒 Yok (Açılacak)'}\n• **Doğrulama:** ${chVerify ? `✅ ${chVerify}` : '❌ Yok'}\n• **Destek:** ${chTicket ? `✅ ${chTicket}` : '❌ Yok'}`,
               inline: false
             },
             {
@@ -1789,7 +1795,7 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.showModal(modal);
     }
 
-    // 2. Turnuva Modalı Gönderildiğinde
+    // 2. Turnuva Modalı Gönderildiğinde -> ANINDA KANALI BUL/AÇ VE LİSTELE
     if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_tourney_reg_')) {
       await interaction.deferReply({ ephemeral: true });
 
@@ -1801,7 +1807,11 @@ client.on('interactionCreate', async (interaction) => {
       const user = interaction.user;
       const guild = interaction.guild;
 
-      const attendeesChannel = await getOrCreateTourneyChannel(guild);
+      // Turnuva Kanalını Kesinlikle Bul veya Anında Aç
+      let attendeesChannel = await getOrCreateTourneyChannel(guild);
+      if (!attendeesChannel) {
+        attendeesChannel = interaction.channel; // Güvenli yedek kanal
+      }
 
       let attendeeIndex = 1;
       if (eventData) {
@@ -1809,6 +1819,7 @@ client.on('interactionCreate', async (interaction) => {
         attendeeIndex = eventData.attendees.size;
       }
 
+      // Listeleme Kanalına Anında Kart Gönder
       if (attendeesChannel) {
         const attendeeEmbed = new EmbedBuilder()
           .setColor('#10B981')
@@ -1853,7 +1864,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       return interaction.editReply({
-        content: `🎉 **Turnuva kaydınız başarıyla alındı!**\n🎮 **Minecraft Nickiniz:** \`${ign}\`\n📋 İsminiz ${attendeesChannel ? attendeesChannel : '#turnuva-gelecek-olanlar'} kanalına yazıldı!`
+        content: `🎉 **Turnuva kaydınız başarıyla alındı!**\n🎮 **Minecraft Nickiniz:** \`${ign}\`\n📋 İsminiz ${attendeesChannel} kanalına yazıldı!`
       });
     }
 
@@ -2242,7 +2253,11 @@ client.on('interactionCreate', async (interaction) => {
 
         const results = [];
 
-        // 1. #klan-başvuru & #başvuru-log
+        // 1. #🏆・turnuva-gelecek-olanlar
+        let chTourney = await getOrCreateTourneyChannel(guild);
+        results.push(`🏆 **#🏆・turnuva-gelecek-olanlar** kanalı oluşturuldu: ${chTourney}`);
+
+        // 2. #klan-başvuru & #başvuru-log
         let chApply = channels.find(c => c.name.includes('klan-başvuru') || c.name.includes('basvuru'));
         if (!chApply) {
           chApply = await guild.channels.create({
@@ -2256,11 +2271,11 @@ client.on('interactionCreate', async (interaction) => {
           results.push(`📁 **#klan-başvuru** kanalı oluşturuldu: ${chApply}`);
         }
 
-        // Yönetici Özel #temiz-log Kanalı
+        // 3. Yönetici Özel #temiz-log Kanalı
         let chCleanLog = await getOrCreateCleanLogChannel(guild);
         results.push(`🔒 **#✅・temiz-log** kanalı oluşturuldu: ${chCleanLog}`);
 
-        // Yönetici Özel #hile-log Kanalı
+        // 4. Yönetici Özel #hile-log Kanalı
         let chCheatLog = await getOrCreateCheatLogChannel(guild);
         results.push(`🔒 **#🚫・hile-log** kanalı oluşturuldu: ${chCheatLog}`);
 
@@ -2305,7 +2320,7 @@ client.on('interactionCreate', async (interaction) => {
           results.push(`✅ **Klan Başvuru Paneli** kuruldu: ${chApply}`);
         }
 
-        // 2. #doğrulama
+        // 5. #doğrulama
         let chVerify = channels.find(c => c.name.includes('doğrulama') || c.name.includes('dogrulama') || c.name.includes('kayıt') || c.name.includes('giris'));
         if (!chVerify) {
           chVerify = await guild.channels.create({
@@ -2337,7 +2352,7 @@ client.on('interactionCreate', async (interaction) => {
           results.push(`✅ **Doğrulama Paneli** kuruldu: ${chVerify}`);
         }
 
-        // 3. #destek-talebi
+        // 6. #destek-talebi
         let chTicket = channels.find(c => c.name.includes('destek') || c.name.includes('ticket'));
         if (!chTicket) {
           chTicket = await guild.channels.create({
@@ -2383,7 +2398,7 @@ client.on('interactionCreate', async (interaction) => {
           results.push(`✅ **Kategorili Destek Paneli** kuruldu: ${chTicket}`);
         }
 
-        // 4. #ceza-kayıt-log
+        // 7. #ceza-kayıt-log
         let chPunishLog = channels.find(c => c.name.includes('ceza-kayıt') || c.name.includes('ceza-log') || c.name.includes('moderasyon-log'));
         if (!chPunishLog) {
           chPunishLog = await guild.channels.create({
