@@ -914,7 +914,9 @@ async function getOrCreateStaffLeaderboardChannel(guild) {
 // 9. Canlı Sıralama Embed'ini Oluşturma Fonksiyonu
 async function buildStaffLeaderboardEmbed(guild, data) {
   const staffList = [];
-  const members = await guild.members.fetch().catch(() => guild.members.cache);
+  const members = guild.members.cache.size > 0
+    ? guild.members.cache
+    : await guild.members.fetch().catch(() => guild.members.cache);
 
   for (const [userId, member] of members) {
     if (member.user.bot) continue;
@@ -4125,39 +4127,19 @@ client.on('interactionCreate', async (interaction) => {
         const data = loadData();
         if (!data.tagUsers) data.tagUsers = {};
 
-        // Discord REST API'den tüm üyelerin gerçek klan rozetlerini (⚡ VYRN) çek
-        await refreshGuildClanTags(guild);
+        // 1. Discord REST API'den tek istekte tüm üyelerin rozetlerini çek
+        await refreshGuildClanTags(guild).catch(() => {});
 
-        const members = await guild.members.fetch().catch(() => guild.members.cache);
+        // 2. Üyeleri al (önbellekten anında çeker)
+        const members = guild.members.cache.size > 0
+          ? guild.members.cache
+          : await guild.members.fetch().catch(() => guild.members.cache);
 
-        // 1. Hedef kadroyu filtrele (Klan Üyeleri, Has Klan Üyeleri ve Yetkililer)
+        // 3. Hedef kadroyu filtrele (Klan Üyeleri, Has Klan Üyeleri ve Yetkililer)
         const targetMembers = Array.from(members.values()).filter(m => {
           if (!m || !m.user || m.user.bot) return false;
           return targetRole ? m.roles.cache.has(targetRole.id) : isClanOrStaffMember(m, data);
         });
-
-        // 2. Her üyenin profilini doğrudan GET /users/{id} ile kesin olarak sorgula (8'erli paralel çekim)
-        const batchSize = 8;
-        for (let i = 0; i < targetMembers.length; i += batchSize) {
-          const batch = targetMembers.slice(i, i + batchSize);
-          await Promise.all(batch.map(async (m) => {
-            try {
-              const rawUser = await client.rest.get(Routes.user(m.id)).catch(() => null);
-              if (rawUser) {
-                const clanObj = rawUser.primary_guild || rawUser.clan;
-                if (clanObj && typeof clanObj === 'object') {
-                  if (clanObj.identity_guild_id && clanObj.identity_guild_id === guild.id) {
-                    rawClanTagsCache.set(m.id, 'VYRN');
-                  } else if (clanObj.tag) {
-                    rawClanTagsCache.set(m.id, String(clanObj.tag));
-                  }
-                } else if (typeof clanObj === 'string') {
-                  rawClanTagsCache.set(m.id, clanObj);
-                }
-              }
-            } catch (e) {}
-          }));
-        }
 
         let tagCount = 0;
         let totalTargetCount = targetMembers.length;
@@ -5030,36 +5012,16 @@ client.on('interactionCreate', async (interaction) => {
         // data zaten yukarıda yüklendi
 
         await interaction.deferReply({ ephemeral: true });
-        await refreshGuildClanTags(guild);
+        await refreshGuildClanTags(guild).catch(() => {});
 
-        const members = await guild.members.fetch().catch(() => guild.members.cache);
+        const members = guild.members.cache.size > 0
+          ? guild.members.cache
+          : await guild.members.fetch().catch(() => guild.members.cache);
 
         const targetMembers = Array.from(members.values()).filter(m => {
           if (!m || !m.user || m.user.bot) return false;
           return targetRole ? m.roles.cache.has(targetRole.id) : isClanOrStaffMember(m, data);
         });
-
-        const batchSize = 8;
-        for (let i = 0; i < targetMembers.length; i += batchSize) {
-          const batch = targetMembers.slice(i, i + batchSize);
-          await Promise.all(batch.map(async (m) => {
-            try {
-              const rawUser = await client.rest.get(Routes.user(m.id)).catch(() => null);
-              if (rawUser) {
-                const clanObj = rawUser.primary_guild || rawUser.clan;
-                if (clanObj && typeof clanObj === 'object') {
-                  if (clanObj.identity_guild_id && clanObj.identity_guild_id === guild.id) {
-                    rawClanTagsCache.set(m.id, 'VYRN');
-                  } else if (clanObj.tag) {
-                    rawClanTagsCache.set(m.id, String(clanObj.tag));
-                  }
-                } else if (typeof clanObj === 'string') {
-                  rawClanTagsCache.set(m.id, clanObj);
-                }
-              }
-            } catch (e) {}
-          }));
-        }
 
         let warnedCount = 0;
         let dmClosedCount = 0;
