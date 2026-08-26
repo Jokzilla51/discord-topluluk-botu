@@ -518,51 +518,83 @@ async function getOrCreateTagLogChannel(guild) {
   }
 }
 
-// 6.2. Üyenin Klan Tagını (VYRN / Vyron) Taşıyıp Taşımadığını Gelişmiş Şekilde Kontrol Etme (Badge, Şekilli Font, Sembol vb. Dahil)
+// 6.2. Üyenin Klan Tagını (VYRN / Vyron) Taşıyıp Taşımadığını Gelişmiş Şekilde Kontrol Etme (Discord Clan Tag Rozeti + İsim + Durum)
 function memberHasTag(member, tagText = 'VYRN') {
   if (!member) return false;
-  const searchTag = (tagText || 'VYRN').toLowerCase();
 
-  // 1. Discord'un Resmi Klan / Guild Tag Rozeti Kontrolü (Discord Clan Tag Badge)
-  const discordClanTag = member.user?.clan?.tag || member.user?._patch?.clan?.tag || member.guild?.clan?.tag;
-  if (discordClanTag && typeof discordClanTag === 'string') {
-    const cleanClanTag = discordClanTag.toLowerCase();
-    if (cleanClanTag.includes('vyrn') || cleanClanTag.includes('vyron') || cleanClanTag.includes(searchTag)) {
-      return true;
+  // 1. Discord'un Resmi Klan / Guild Tag Rozeti Kontrolü (Discord Clan Tag Badge - Örn: [⚡ VYRN])
+  const u = member.user || member;
+  const clanObj = u.clan || u._patch?.clan || member._patch?.user?.clan || member.guild?.clan;
+  
+  if (clanObj) {
+    let badgeTag = '';
+    if (typeof clanObj === 'string') {
+      badgeTag = clanObj;
+    } else if (typeof clanObj.tag === 'string') {
+      badgeTag = clanObj.tag;
+    }
+
+    if (badgeTag) {
+      const cleanBadge = badgeTag.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (cleanBadge === 'vyrn' || cleanBadge === 'vyron' || cleanBadge.includes('vyrn') || cleanBadge.includes('vyron')) {
+        return true;
+      }
     }
   }
 
   // 2. Şekilli Font, Emoji, Boşluk ve Sembol Temizleyici (Unicode Normalization)
   const normalize = (text) => {
-    if (!text) return '';
+    if (!text || typeof text !== 'string') return '';
     return text
-      .normalize('NFKD') // 𝙑𝙔𝙍𝙉, 𝑉𝑌𝑅𝑁, ᴠʏʀɴ gibi tüm şekilli yazı tiplerini düz harfe çevirir
+      .normalize('NFKD') // 𝙑𝙔𝙍𝙉, 𝑉𝑌𝑅𝑁, ᴠʏʀɴ, 𝕍𝕐ℝℕ, 𝚅𝚈𝚁𝙽
       .toLowerCase()
-      .replace(/[\u0300-\u036f]/g, '') // Aksan ve tonlamaları temizler
-      .replace(/[^a-z0-9]/g, ''); // Boşluk, çizgi, emoji ve sembolleri kaldırır
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/g, '');
   };
 
-  const usernameNorm = normalize(member.user?.username);
-  const displayNameNorm = normalize(member.displayName);
-  const globalNameNorm = normalize(member.user?.globalName);
-  const nicknameNorm = normalize(member.nickname);
+  const rawTexts = [
+    member.nickname || '',
+    member.displayName || '',
+    u.username || '',
+    u.globalName || '',
+    u.tag || ''
+  ];
 
-  // 3. İsimde / Kullanıcı Adında VYRN veya Vyron Geçiyor mu?
-  if (
-    usernameNorm.includes('vyrn') || usernameNorm.includes('vyron') || usernameNorm.includes(normalize(searchTag)) ||
-    displayNameNorm.includes('vyrn') || displayNameNorm.includes('vyron') || displayNameNorm.includes(normalize(searchTag)) ||
-    globalNameNorm.includes('vyrn') || globalNameNorm.includes('vyron') || globalNameNorm.includes(normalize(searchTag)) ||
-    nicknameNorm.includes('vyrn') || nicknameNorm.includes('vyron') || nicknameNorm.includes(normalize(searchTag))
-  ) {
-    return true;
+  // 3. İsim ve Kullanıcı Adında Doğrudan veya Şekilli VYRN / Vyron Kontrolü
+  for (const raw of rawTexts) {
+    if (!raw) continue;
+    const lowerRaw = raw.toLowerCase();
+    const cleanNorm = normalize(raw);
+
+    if (
+      lowerRaw.includes('vyrn') ||
+      lowerRaw.includes('vyron') ||
+      lowerRaw.includes('v y r n') ||
+      lowerRaw.includes('v.y.r.n') ||
+      lowerRaw.includes('v_y_r_n') ||
+      lowerRaw.includes('v-y-r-n') ||
+      cleanNorm.includes('vyrn') ||
+      cleanNorm.includes('vyron')
+    ) {
+      return true;
+    }
   }
 
-  // 4. Özel Durum (Custom Status / Biyografi) Kontrolü
-  const customStatus = member.presence?.activities?.find(a => a.type === 4)?.state || '';
-  if (customStatus) {
-    const statusNorm = normalize(customStatus);
-    if (statusNorm.includes('vyrn') || statusNorm.includes('vyron') || statusNorm.includes(normalize(searchTag))) {
-      return true;
+  // 4. Özel Durum (Custom Status / Biyografi / Aktivite) Kontrolü
+  const activities = member.presence?.activities || [];
+  for (const act of activities) {
+    const stateText = act.state || act.name || act.details || '';
+    if (stateText) {
+      const lowerState = stateText.toLowerCase();
+      const normState = normalize(stateText);
+      if (
+        lowerState.includes('vyrn') ||
+        lowerState.includes('vyron') ||
+        normState.includes('vyrn') ||
+        normState.includes('vyron')
+      ) {
+        return true;
+      }
     }
   }
 
@@ -1888,10 +1920,15 @@ async function handleTagCheck(oldMember, newMember) {
       };
       saveData(data);
 
-      // Eğer tag rolü ayarlıysa ver
-      if (data.tagRoleId) {
-        const tagRole = guild.roles.cache.get(data.tagRoleId);
-        if (tagRole && !newMember.roles.cache.has(tagRole.id)) {
+      // Tag Rolü (Kayıtlı veya otomatik Vyron Tag / Taglı rolü)
+      const tagRole = (data.tagRoleId && guild.roles.cache.get(data.tagRoleId)) ||
+                      guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron tag') ||
+                      guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron • tag') ||
+                      guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron') && r.name.toLowerCase().includes('tag')) ||
+                      guild.roles.cache.find(r => r.name.toLowerCase().includes('taglı') || r.name.toLowerCase().includes('tagli'));
+
+      if (tagRole && isClanOrStaffMember(newMember, data)) {
+        if (!newMember.roles.cache.has(tagRole.id)) {
           await newMember.roles.add(tagRole).catch(() => {});
         }
       }
@@ -1922,12 +1959,15 @@ async function handleTagCheck(oldMember, newMember) {
         lastTagChange: Date.now()
       };
 
-      // Eğer tag rolü varsa geri al
-      if (data.tagRoleId) {
-        const tagRole = guild.roles.cache.get(data.tagRoleId);
-        if (tagRole && newMember.roles.cache.has(tagRole.id)) {
-          await newMember.roles.remove(tagRole).catch(() => {});
-        }
+      // Tag rolü varsa geri al
+      const tagRole = (data.tagRoleId && guild.roles.cache.get(data.tagRoleId)) ||
+                      guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron tag') ||
+                      guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron • tag') ||
+                      guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron') && r.name.toLowerCase().includes('tag')) ||
+                      guild.roles.cache.find(r => r.name.toLowerCase().includes('taglı') || r.name.toLowerCase().includes('tagli'));
+
+      if (tagRole && newMember.roles.cache.has(tagRole.id)) {
+        await newMember.roles.remove(tagRole).catch(() => {});
       }
 
       // SADECE KLAN ÜYESİ, HAS KLAN ÜYESİ VEYA YETKİLİ İSE LOGLA VE UYARI AT (Normal üyeler tag taşımak zorunda değildir)
@@ -3904,6 +3944,12 @@ client.on('interactionCreate', async (interaction) => {
           totalTargetCount++;
           const hasTag = memberHasTag(member, data.tagText || 'VYRN');
 
+          const tagRole = (data.tagRoleId && guild.roles.cache.get(data.tagRoleId)) ||
+                          guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron tag') ||
+                          guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron • tag') ||
+                          guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron') && r.name.toLowerCase().includes('tag')) ||
+                          guild.roles.cache.find(r => r.name.toLowerCase().includes('taglı') || r.name.toLowerCase().includes('tagli'));
+
           if (hasTag) {
             tagCount++;
             data.tagUsers[userId] = {
@@ -3911,12 +3957,15 @@ client.on('interactionCreate', async (interaction) => {
               warned: false,
               lastTagChange: data.tagUsers[userId]?.lastTagChange || Date.now()
             };
-            if (data.tagRoleId && !member.roles.cache.has(data.tagRoleId)) {
-              await member.roles.add(data.tagRoleId).catch(() => {});
+            if (tagRole && !member.roles.cache.has(tagRole.id)) {
+              await member.roles.add(tagRole).catch(() => {});
             }
           } else {
             if (data.tagUsers[userId]?.hasTag) {
               data.tagUsers[userId].hasTag = false;
+            }
+            if (tagRole && member.roles.cache.has(tagRole.id)) {
+              await member.roles.remove(tagRole).catch(() => {});
             }
             nonTagClanMembers.push(member);
           }
@@ -3946,8 +3995,27 @@ client.on('interactionCreate', async (interaction) => {
 
         const chTagLog = await getOrCreateTagLogChannel(guild);
 
+        const nonTagStaff = nonTagClanMembers.filter(m => isStaffMember(m, data));
+        const nonTagMembers = nonTagClanMembers.filter(m => !isStaffMember(m, data));
+
+        let nonTagText = '';
+        if (nonTagClanMembers.length === 0) {
+          nonTagText = '✅ *Taranan kadrodaki tüm üyelerde klan tagı (**VYRN**) eksiksiz bulunmaktadır!*';
+        } else {
+          if (nonTagStaff.length > 0) {
+            nonTagText += `👑 **Tagı Olmayan Yetkililer (${nonTagStaff.length} Kişi):**\n` +
+              nonTagStaff.slice(0, 15).map(m => `• ${m} (\`${m.user.tag}\`) - <@&${m.roles.highest.id}>`).join('\n') +
+              (nonTagStaff.length > 15 ? `\n*...ve ${nonTagStaff.length - 15} yetkili daha.*` : '') + '\n\n';
+          }
+          if (nonTagMembers.length > 0) {
+            nonTagText += `⚔️ **Tagı Olmayan Klan Üyeleri (${nonTagMembers.length} Kişi):**\n` +
+              nonTagMembers.slice(0, 20).map(m => `• ${m} (\`${m.user.tag}\`)`).join('\n') +
+              (nonTagMembers.length > 20 ? `\n*...ve ${nonTagMembers.length - 20} üye daha.*` : '');
+          }
+        }
+
         const scanEmbed = new EmbedBuilder()
-          .setColor('#10B981')
+          .setColor(nonTagClanMembers.length > 0 ? '#F59E0B' : '#10B981')
           .setAuthor({ name: `${guild.name} • Tag Kontrol & Denetim`, iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
           .setTitle(`🏷️ ${targetRole ? `${targetRole.name.toUpperCase()} ROLÜ` : 'KLAN & YETKİLİ'} TAGI TARAMA RAPORU`)
           .setDescription(
@@ -3959,12 +4027,10 @@ client.on('interactionCreate', async (interaction) => {
             `🏷️ **Aktif Tag Metni:** \`${data.tagText || 'VYRN'} / Vyron\`\n` +
             `📢 **Tag Log Kanalı:** ${chTagLog ? chTagLog : '`#tag-log`'}\n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `### ⚠️ Tagı Olmayanlar:\n` +
-            (nonTagClanMembers.length > 0
-              ? nonTagClanMembers.slice(0, 20).map(m => `• ${m} (\`${m.user.tag}\`)`).join('\n') + (nonTagClanMembers.length > 20 ? `\n*...ve ${nonTagClanMembers.length - 20} kişi daha.*` : '')
-              : '✅ *Taranan kadrodaki tüm üyelerde klan tagı eksiksiz bulunmaktadır!*')
+            `### ⚠️ Tagı Eksik Olan Kişilerin Listesi:\n\n` +
+            nonTagText
           )
-          .setFooter({ text: FOOTER_TEXT })
+          .setFooter({ text: `${FOOTER_TEXT} • Tag Denetim Sistemi` })
           .setTimestamp();
 
         if (shouldWarnDM) {
