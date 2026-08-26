@@ -128,14 +128,16 @@ app.listen(PORT, () => {
 
 // ==========================================
 // 2. DISCORD CLIENT & BELLEK HAVUZLARI
-// (Kanala atılan SS'leri yakalamak için MessageContent, ses takibi için GuildVoiceStates aktif)
+// (Kanala atılan SS'leri yakalamak için MessageContent, ses takibi için GuildVoiceStates, tag ve üye değişiklikleri için GuildMembers/Presences aktif)
 // ==========================================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildPresences
   ]
 });
 
@@ -558,20 +560,35 @@ function getPingableStaffRoles(guild, roleIds) {
   });
 }
 
-// 7. Yetkili / Yönetici Kontrolü
+// 7. Yetkili / Yönetici Kontrolü (Tüm Yetkili Rollerini ve Yetkileri Tanır)
 function isStaffMember(member, data) {
   if (!member || !member.roles) return false;
   if (member.permissions.has(PermissionFlagsBits.Administrator) ||
       member.permissions.has(PermissionFlagsBits.ManageGuild) ||
       member.permissions.has(PermissionFlagsBits.ManageRoles) ||
-      member.permissions.has(PermissionFlagsBits.ModerateMembers)) return true;
+      member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
+      member.permissions.has(PermissionFlagsBits.KickMembers) ||
+      member.permissions.has(PermissionFlagsBits.BanMembers) ||
+      member.permissions.has(PermissionFlagsBits.ManageMessages)) return true;
 
   const allStaffRoles = [
     ...(data?.staffRoleIds || []),
     ...(data?.ticketStaffRoleIds || []),
     ...(data?.aboneStaffRoleIds || [])
   ];
-  return member.roles.cache.some(r => allStaffRoles.includes(r.id) || r.name.toLowerCase().includes('yetkili') || r.name.toLowerCase().includes('mod') || r.name.toLowerCase().includes('admin'));
+
+  if (member.roles.cache.some(r => allStaffRoles.includes(r.id))) return true;
+
+  const staffKeywords = [
+    'yetkili', 'mod', 'admin', 'denet', 'aac', 'yardımcı', 'yardimci',
+    'sr.', 'kurucu', 'ekip', 'staff', 'destek', 'üst yetkili', 'ust yetkili',
+    'd.mod', 'd.admin', 'd.yardımcı', 'd-admin', 'd-mod', 'd-yardimci'
+  ];
+
+  return member.roles.cache.some(r => {
+    const rName = r.name.toLowerCase();
+    return staffKeywords.some(kw => rName.includes(kw));
+  });
 }
 
 // 7.1. Tag Zorunlu Olan Kadroyu Kontrol Etme (Komutla eklenen roller veya Klan & Yetkili kadrosu)
@@ -603,19 +620,8 @@ function formatDuration(ms) {
   return `${hours} Saat ${mins} Dk`;
 }
 
-// Yetkili Mesai Sisteminin Canlı Olup Olmadığını Kontrol Eden Fonksiyon (Yarın Sabah 09:00'a Kadar Bekler)
+// Yetkili Mesai Sisteminin Canlı Olup Olmadığını Kontrol Eden Fonksiyon (7/24 Daima Aktiftir)
 function isStaffTrackingLive() {
-  const now = new Date();
-  const turkeyDate = new Date(now.getTime() + (3 * 60 * 60 * 1000));
-  const year = turkeyDate.getUTCFullYear();
-  const month = String(turkeyDate.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(turkeyDate.getUTCDate()).padStart(2, '0');
-  const hour = turkeyDate.getUTCHours();
-  const dateStr = `${year}-${month}-${day}`;
-
-  // 26 Ağustos 2026 saat 09:00'dan önce başlatma (Yarın sabah 09:00'da başlar)
-  if (dateStr < '2026-08-26') return false;
-  if (dateStr === '2026-08-26' && hour < 9) return false;
   return true;
 }
 
@@ -647,6 +653,124 @@ async function getOrCreateStaffLeaderboardChannel(guild) {
   }
 }
 
+// 9. Canlı Sıralama Embed'ini Oluşturma Fonksiyonu
+async function buildStaffLeaderboardEmbed(guild, data) {
+  const staffList = [];
+  const members = await guild.members.fetch().catch(() => guild.members.cache);
+
+  for (const [userId, member] of members) {
+    if (member.user.bot) continue;
+    const isStaff = isStaffMember(member, data);
+    const hasStats = data.staffStats && data.staffStats[userId] !== undefined;
+
+    if (!isStaff && !hasStats) continue;
+
+    const userStats = (data.staffStats && data.staffStats[userId]) || {
+      todayVoice: 0,
+      weeklyVoice: 0,
+      totalVoice: 0,
+      todayTicketMsgs: 0,
+      weeklyTicketMsgs: 0,
+      totalTicketMsgs: 0,
+      todayTicketClaims: 0,
+      weeklyTicketClaims: 0,
+      totalTicketClaims: 0,
+      todayApplyClaims: 0,
+      weeklyApplyClaims: 0,
+      totalApplyClaims: 0,
+      todayAnydeskChecks: 0,
+      weeklyAnydeskChecks: 0,
+      totalAnydeskChecks: 0,
+      todaySolvedTickets: 0,
+      weeklySolvedTickets: 0,
+      totalSolvedTickets: 0,
+      todayGearGiven: 0,
+      weeklyGearGiven: 0,
+      totalGearGiven: 0,
+      voiceJoinedAt: null
+    };
+
+    let liveVoiceTime = userStats.todayVoice || 0;
+    let isCurrentlyInVoice = false;
+
+    if (member.voice && member.voice.channelId && member.voice.channelId !== guild.afkChannelId) {
+      isCurrentlyInVoice = true;
+      if (userStats.voiceJoinedAt) {
+        liveVoiceTime += (Date.now() - userStats.voiceJoinedAt);
+      }
+    }
+
+    const todayTicketClaims = userStats.todayTicketClaims || userStats.todayClaimed || 0;
+    const todayApplyClaims = userStats.todayApplyClaims || 0;
+    const todayAnydeskChecks = userStats.todayAnydeskChecks || 0;
+    const todaySolvedTickets = userStats.todaySolvedTickets || userStats.todayTickets || 0;
+    const todayTicketMsgs = userStats.todayTicketMsgs || 0;
+    const todayGearGiven = userStats.todayGearGiven || 0;
+
+    const score = Math.floor(liveVoiceTime / 60000) * 2 +
+                  todayTicketClaims * 20 +
+                  todayApplyClaims * 20 +
+                  todayAnydeskChecks * 30 +
+                  todaySolvedTickets * 25 +
+                  todayTicketMsgs * 2 +
+                  todayGearGiven * 15;
+
+    staffList.push({
+      member,
+      userId,
+      todayVoice: liveVoiceTime,
+      totalVoice: (userStats.totalVoice || 0) + (liveVoiceTime - (userStats.todayVoice || 0)),
+      todayTicketClaims,
+      todayApplyClaims,
+      todayAnydeskChecks,
+      todaySolvedTickets,
+      todayTicketMsgs,
+      todayGearGiven,
+      score,
+      isCurrentlyInVoice
+    });
+  }
+
+  // Puana ve seste kalma süresine göre sırala
+  staffList.sort((a, b) => b.score - a.score || b.todayVoice - a.todayVoice);
+
+  const rankIcons = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+  let rankText = '';
+
+  if (staffList.length === 0) {
+    rankText = '>>> ℹ️ *Henüz mesai yapan veya seste aktif olan bir yetkili bulunmuyor.*';
+  } else {
+    staffList.slice(0, 15).forEach((item, idx) => {
+      const icon = rankIcons[idx] || `\`#${idx + 1}\``;
+      const voiceStatus = item.isCurrentlyInVoice ? '🟢 **Seste**' : '⚪ **Boşta**';
+      rankText += `${icon} **${item.member.displayName}** (${item.member})\n` +
+        `🎙️ \`${formatDuration(item.todayVoice)}\` (${voiceStatus}) • ` +
+        `✋ Ticket: \`${item.todayTicketClaims}\` • ⚔️ Başvuru: \`${item.todayApplyClaims}\` • 🖥️ Anydesk: \`${item.todayAnydeskChecks}\`\n` +
+        `✅ Çözülen: \`${item.todaySolvedTickets}\` • 💬 Mesaj: \`${item.todayTicketMsgs}\` • 🎒 Gear: \`${item.todayGearGiven}\` • ⭐ **${item.score} Puan**\n\n`;
+    });
+  }
+
+  const now = new Date();
+  const turkeyHour = (now.getUTCHours() + 3) % 24;
+  const isShiftActive = turkeyHour >= 9 && turkeyHour < 24;
+
+  const leaderboardEmbed = new EmbedBuilder()
+    .setColor('#8B5CF6')
+    .setAuthor({ name: 'Vyron Klan Yönetimi • Canlı Yetkili Mesai & Sıralama', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
+    .setTitle('👑 GÜNLÜK YETKİLİ MESAİ & LİDERLİK TABLOSU')
+    .setDescription(
+      `📌 **Mesai Saatleri:** \`09:00 - 00:00 (Gece 12)\`\n` +
+      `⏱️ **Vardiya Durumu:** ${isShiftActive ? '🟢 **Aktif Mesai (Saat 09:00 - 00:00)**' : '🌙 **Gece Dinlenme Aralığı (00:00 - 09:00)**'}\n\n` +
+      `*Yetkililerin ses süreleri, üstlendikleri talepler, ticket mesajları, çözümleri ve gear teslimatları **komutsuz olarak 7/24 otomatik** hesaplanır.*\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      rankText
+    )
+    .setFooter({ text: `${FOOTER_TEXT} • Otomatik Canlı Tablo` })
+    .setTimestamp();
+
+  return leaderboardEmbed;
+}
+
 // 9. Canlı Sıralama Tablosunu Güncelle (Komutsuz & Otomatik)
 async function updateStaffLeaderboard(guild) {
   try {
@@ -656,139 +780,7 @@ async function updateStaffLeaderboard(guild) {
     const ch = await getOrCreateStaffLeaderboardChannel(guild);
     if (!ch) return; // Kanal yoksa kafasına göre oluşturma, /yetkili-siralama-kur ile kurulsun
 
-    // Eğer yarın sabah 09:00'dan önce ise geri sayım paneli göster
-    if (!isStaffTrackingLive()) {
-      const preEmbed = new EmbedBuilder()
-        .setColor('#8B5CF6')
-        .setAuthor({ name: 'Vyron Klan Yönetimi • Canlı Yetkili Mesai & Sıralama', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-        .setTitle('👑 GÜNLÜK YETKİLİ MESAİ & LİDERLİK TABLOSU')
-        .setDescription(
-          `📌 **Mesai Saatleri:** \`09:00 - 00:00 (Gece 12)\`\n` +
-          `⏱️ **Vardiya Durumu:** ⏳ **Resmi Başlangıç: Yarın Sabah 09:00**\n\n` +
-          `*Yetkili mesai ve liderlik sistemi yarın sabah 09:00'da resmi olarak başlayacaktır. Tüm yetkililer eşit ve sıfır puanla başlayacaktır.*\n\n` +
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-          `>>> ℹ️ *Sistem yarın sabah 09:00'da canlı takibe başlayacaktır.*`
-        )
-        .setFooter({ text: `${FOOTER_TEXT} • Otomatik Canlı Tablo` })
-        .setTimestamp();
-
-      let msg = null;
-      if (data.staffLeaderboardMessageId) {
-        msg = await ch.messages.fetch(data.staffLeaderboardMessageId).catch(() => null);
-      }
-      if (msg) {
-        await msg.edit({ embeds: [preEmbed], components: [] }).catch(() => {});
-      } else {
-        const newMsg = await ch.send({ embeds: [preEmbed], components: [] }).catch(() => {});
-        if (newMsg) {
-          data.staffLeaderboardMessageId = newMsg.id;
-          data.staffLeaderboardChannelId = ch.id;
-          saveData(data);
-        }
-      }
-      return;
-    }
-
-    const now = new Date();
-    const turkeyHour = (now.getUTCHours() + 3) % 24;
-    const isShiftActive = turkeyHour >= 9 && turkeyHour < 24;
-
-    const staffList = [];
-    const members = await guild.members.fetch().catch(() => guild.members.cache);
-
-    for (const [userId, member] of members) {
-      if (member.user.bot) continue;
-      const isStaff = isStaffMember(member, data);
-      const hasStats = data.staffStats[userId] !== undefined;
-
-      if (!isStaff && !hasStats) continue;
-
-      const userStats = data.staffStats[userId] || {
-        todayVoice: 0,
-        totalVoice: 0,
-        todayTicketMsgs: 0,
-        totalTicketMsgs: 0,
-        todayClaimed: 0,
-        totalClaimed: 0,
-        todayTickets: 0,
-        totalTickets: 0,
-        voiceJoinedAt: null
-      };
-
-      let liveVoiceTime = userStats.todayVoice || 0;
-      let isCurrentlyInVoice = false;
-
-      if (member.voice && member.voice.channelId && member.voice.channelId !== guild.afkChannelId) {
-        isCurrentlyInVoice = true;
-        if (userStats.voiceJoinedAt) {
-          liveVoiceTime += (Date.now() - userStats.voiceJoinedAt);
-        }
-      }
-
-      // Puan Formülü: Seste 1dk=2p, Üstlenen Ticket=20p, Üstlenen Başvuru=20p, Anydesk Kontrol=30p, Çözülen Talep=25p, Ticket Mesaj=2p, Gear Verme=15p
-      const todayTicketClaims = userStats.todayTicketClaims || userStats.todayClaimed || 0;
-      const todayApplyClaims = userStats.todayApplyClaims || 0;
-      const todayAnydeskChecks = userStats.todayAnydeskChecks || 0;
-      const todaySolvedTickets = userStats.todaySolvedTickets || userStats.todayTickets || 0;
-      const todayTicketMsgs = userStats.todayTicketMsgs || 0;
-      const todayGearGiven = userStats.todayGearGiven || 0;
-
-      const score = Math.floor(liveVoiceTime / 60000) * 2 +
-                    todayTicketClaims * 20 +
-                    todayApplyClaims * 20 +
-                    todayAnydeskChecks * 30 +
-                    todaySolvedTickets * 25 +
-                    todayTicketMsgs * 2 +
-                    todayGearGiven * 15;
-
-      staffList.push({
-        member,
-        userId,
-        todayVoice: liveVoiceTime,
-        totalVoice: (userStats.totalVoice || 0) + (liveVoiceTime - (userStats.todayVoice || 0)),
-        todayTicketClaims,
-        todayApplyClaims,
-        todayAnydeskChecks,
-        todaySolvedTickets,
-        todayTicketMsgs,
-        todayGearGiven,
-        score,
-        isCurrentlyInVoice
-      });
-    }
-
-    // Puana ve seste kalma süresine göre sırala
-    staffList.sort((a, b) => b.score - a.score || b.todayVoice - a.todayVoice);
-
-    const rankIcons = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
-    let rankText = '';
-
-    if (staffList.length === 0) {
-      rankText = '>>> ℹ️ *Henüz mesai yapan veya seste aktif olan bir yetkili bulunmuyor.*';
-    } else {
-      staffList.slice(0, 15).forEach((item, idx) => {
-        const icon = rankIcons[idx] || `\`#${idx + 1}\``;
-        const voiceStatus = item.isCurrentlyInVoice ? '🟢 **Seste**' : '⚪ **Boşta**';
-        rankText += `${icon} **${item.member.displayName}** (${item.member})\n` +
-          `🎙️ \`${formatDuration(item.todayVoice)}\` (${voiceStatus}) • ` +
-          `✋ Ticket: \`${item.todayTicketClaims}\` • ⚔️ Başvuru: \`${item.todayApplyClaims}\` • 🖥️ Anydesk: \`${item.todayAnydeskChecks}\`\n` +
-          `✅ Çözülen: \`${item.todaySolvedTickets}\` • 💬 Mesaj: \`${item.todayTicketMsgs}\` • 🎒 Gear: \`${item.todayGearGiven}\` • ⭐ **${item.score} Puan**\n\n`;
-      });
-    }
-
-    const leaderboardEmbed = new EmbedBuilder()
-      .setColor('#8B5CF6')
-      .setAuthor({ name: 'Vyron Klan Yönetimi • Canlı Yetkili Mesai & Sıralama', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-      .setTitle('👑 GÜNLÜK YETKİLİ MESAİ & LİDERLİK TABLOSU')
-      .setDescription(
-        `📌 **Mesai Saatleri:** \`09:00 - 00:00 (Gece 12)\`\n` +
-        `⏱️ **Vardiya Durumu:** ${isShiftActive ? '🟢 **Aktif Mesai (Saat 09:00 - 00:00)**' : '🌙 **Gece Dinlenme Aralığı (00:00 - 09:00)**'}\n\n` +
-        `*Yetkililerin ses süreleri, üstlendikleri talepler, ticket mesajları ve çözümleri **komutsuz olarak 7/24 otomatik** hesaplanır ve canlı güncellenir.*\n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        rankText
-      )
-      .setFooter({ text: `${FOOTER_TEXT} • Otomatik Canlı Tablo` })
-      .setTimestamp();
+    const leaderboardEmbed = await buildStaffLeaderboardEmbed(guild, data);
 
     let msg = null;
     if (data.staffLeaderboardMessageId) {
@@ -1753,6 +1745,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       if (userStats.voiceJoinedAt) {
         const duration = Date.now() - userStats.voiceJoinedAt;
         userStats.todayVoice = (userStats.todayVoice || 0) + duration;
+        userStats.weeklyVoice = (userStats.weeklyVoice || 0) + duration;
         userStats.totalVoice = (userStats.totalVoice || 0) + duration;
         userStats.voiceJoinedAt = null;
         saveData(data);
@@ -1765,6 +1758,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         if (userStats.voiceJoinedAt) {
           const duration = Date.now() - userStats.voiceJoinedAt;
           userStats.todayVoice = (userStats.todayVoice || 0) + duration;
+          userStats.weeklyVoice = (userStats.weeklyVoice || 0) + duration;
           userStats.totalVoice = (userStats.totalVoice || 0) + duration;
           userStats.voiceJoinedAt = null;
           saveData(data);
@@ -1774,6 +1768,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         if (userStats.voiceJoinedAt) {
           const duration = Date.now() - userStats.voiceJoinedAt;
           userStats.todayVoice = (userStats.todayVoice || 0) + duration;
+          userStats.weeklyVoice = (userStats.weeklyVoice || 0) + duration;
           userStats.totalVoice = (userStats.totalVoice || 0) + duration;
         }
         userStats.voiceJoinedAt = Date.now();
@@ -2345,13 +2340,13 @@ client.on('interactionCreate', async (interaction) => {
 
       // 4. /yetkili-siralama
       if (commandName === 'yetkili-siralama') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ ephemeral: false });
         const guild = interaction.guild;
-        await updateStaffLeaderboard(guild);
         const data = loadData();
-        const ch = guild.channels.cache.get(data.staffLeaderboardChannelId);
+        const leaderboardEmbed = await buildStaffLeaderboardEmbed(guild, data);
+        await updateStaffLeaderboard(guild).catch(() => {});
         return interaction.editReply({
-          content: `✅ **Yetkili canlı mesai sıralaması güncellendi!**\n📊 Sıralama Panosu: ${ch || '#yetkili-sıralaması'}`
+          embeds: [leaderboardEmbed]
         });
       }
 
