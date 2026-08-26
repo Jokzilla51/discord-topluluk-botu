@@ -87,11 +87,107 @@ function loadData() {
   };
 }
 
-function saveData(data) {
+let cloudSaveTimeout = null;
+
+function triggerCloudSave() {
+  if (cloudSaveTimeout) clearTimeout(cloudSaveTimeout);
+  cloudSaveTimeout = setTimeout(async () => {
+    try {
+      for (const [_, guild] of client.guilds.cache) {
+        await syncDataToDiscordCloud(guild);
+      }
+    } catch (e) {}
+  }, 5000);
+}
+
+function saveData(data, triggerSync = true) {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+    if (triggerSync) {
+      triggerCloudSave();
+    }
   } catch (e) {
     console.error('Data kaydetme hatası:', e);
+  }
+}
+
+// 1.1. DISCORD BULUT YEDEKLEME SİSTEMİ (Render Yeniden Başlatılsa Bile Verileri Otomatik Geri Yükler)
+async function getOrCreateBackupChannel(guild) {
+  try {
+    const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    let ch = channels.find(c => c && c.type === ChannelType.GuildText && (c.name.includes('vyron-bot-data') || c.name.includes('bot-data-backup') || c.name.includes('bot-yedek')));
+    if (!ch) {
+      ch = await guild.channels.create({
+        name: '🔒・vyron-bot-data',
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+        ]
+      });
+    }
+    return ch;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function syncDataFromDiscordCloud(guild) {
+  try {
+    const ch = await getOrCreateBackupChannel(guild);
+    if (!ch) return;
+
+    const messages = await ch.messages.fetch({ limit: 10 }).catch(() => null);
+    if (!messages || messages.size === 0) return;
+
+    const backupMsg = messages.find(m => m.content.startsWith('```json\n/* VYRON_DATA_BACKUP */'));
+    if (backupMsg) {
+      const jsonStr = backupMsg.content.replace('```json\n/* VYRON_DATA_BACKUP */\n', '').replace('\n```', '');
+      const cloudData = JSON.parse(jsonStr);
+      
+      const localData = loadData();
+      if (cloudData.staffStats && Object.keys(cloudData.staffStats).length > 0) {
+        localData.staffStats = cloudData.staffStats;
+      }
+      if (cloudData.tagUsers && Object.keys(cloudData.tagUsers).length > 0) {
+        localData.tagUsers = cloudData.tagUsers;
+      }
+      if (cloudData.lastDailyResetDate) {
+        localData.lastDailyResetDate = cloudData.lastDailyResetDate;
+      }
+      if (cloudData.gearLogChannelId) {
+        localData.gearLogChannelId = cloudData.gearLogChannelId;
+      }
+      if (cloudData.tagRoleId) {
+        localData.tagRoleId = cloudData.tagRoleId;
+      }
+      
+      saveData(localData, false);
+      console.log('✅ Discord Bulutundan Tüm Yetkili Puanları ve Veriler Başarıyla Geri Yüklendi!');
+    }
+  } catch (err) {
+    console.error('Bulut veri geri yükleme hatası:', err.message);
+  }
+}
+
+async function syncDataToDiscordCloud(guild) {
+  try {
+    const ch = await getOrCreateBackupChannel(guild);
+    if (!ch) return;
+
+    const data = loadData();
+    const jsonStr = '```json\n/* VYRON_DATA_BACKUP */\n' + JSON.stringify(data, null, 2) + '\n```';
+
+    const messages = await ch.messages.fetch({ limit: 10 }).catch(() => null);
+    const existingMsg = messages ? messages.find(m => m.content.startsWith('```json\n/* VYRON_DATA_BACKUP */')) : null;
+
+    if (existingMsg) {
+      await existingMsg.edit(jsonStr).catch(() => {});
+    } else {
+      await ch.send(jsonStr).catch(() => {});
+    }
+  } catch (err) {
+    console.error('Bulut veri kaydetme hatası:', err.message);
   }
 }
 
@@ -518,21 +614,70 @@ async function getOrCreateTagLogChannel(guild) {
   }
 }
 
-// 6.2. Üyenin Klan Tagını (VYRN / Vyron) Taşıyıp Taşımadığını Gelişmiş Şekilde Kontrol Etme (Discord Clan Tag Rozeti + İsim + Durum)
+// 6.2. Discord Clan Tag Rozetlerini (⚡ VYRN) Raw REST API ile Toplama & Önbellekleme
+const rawClanTagsCache = new Map();
+
+async function refreshGuildClanTags(guild) {
+  try {
+    if (!guild || !guild.id) return;
+    let rawMembers = null;
+    try {
+      rawMembers = await client.rest.get(Routes.guildMembers(guild.id) + '?limit=1000');
+    } catch (e1) {
+      try {
+        rawMembers = await client.rest.get(Routes.guildMembers(guild.id), { query: { limit: 1000 } });
+      } catch (e2) {}
+    }
+
+    if (Array.isArray(rawMembers)) {
+      for (const m of rawMembers) {
+        if (!m || !m.user) continue;
+        const uId = m.user.id;
+        const clanObj = m.user.clan || m.clan || m.user.primary_guild;
+        
+        let clanTag = null;
+        if (typeof clanObj === 'string') {
+          clanTag = clanObj;
+        } else if (clanObj && typeof clanObj === 'object') {
+          if (clanObj.identity_guild_id && clanObj.identity_guild_id === guild.id) {
+            clanTag = 'VYRN';
+          } else {
+            clanTag = clanObj.tag || clanObj.badge || null;
+          }
+        }
+        
+        if (clanTag) {
+          rawClanTagsCache.set(uId, String(clanTag));
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Raw clan tag çekme hatası:', err.message);
+  }
+}
+
+// 6.3. Üyenin Klan Tagını (VYRN / Vyron) Taşıyıp Taşımadığını Gelişmiş Şekilde Kontrol Etme (Raw Clan Rozeti + İsim + Durum)
 function memberHasTag(member, tagText = 'VYRN') {
   if (!member) return false;
+  const userId = member.id;
 
-  // 1. Discord'un Resmi Klan / Guild Tag Rozeti Kontrolü (Discord Clan Tag Badge - Örn: [⚡ VYRN])
+  // 1. Raw Discord API'den Gelen Gerçek Klan Rozeti (⚡ VYRN) Kontrolü
+  const cachedBadge = rawClanTagsCache.get(userId);
+  if (cachedBadge && typeof cachedBadge === 'string') {
+    const cleanBadge = cachedBadge.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (cleanBadge === 'vyrn' || cleanBadge === 'vyron' || cleanBadge.includes('vyrn') || cleanBadge.includes('vyron') || (member.guild && cachedBadge === member.guild.id)) {
+      return true;
+    }
+  }
+
+  // 2. Discord.js Objesindeki Olası Klan Rozetleri
   const u = member.user || member;
   const clanObj = u.clan || u._patch?.clan || member._patch?.user?.clan || member.guild?.clan;
-  
   if (clanObj) {
     let badgeTag = '';
-    if (typeof clanObj === 'string') {
-      badgeTag = clanObj;
-    } else if (typeof clanObj.tag === 'string') {
-      badgeTag = clanObj.tag;
-    }
+    if (typeof clanObj === 'string') badgeTag = clanObj;
+    else if (typeof clanObj.tag === 'string') badgeTag = clanObj.tag;
+    else if (clanObj.identity_guild_id && member.guild && clanObj.identity_guild_id === member.guild.id) badgeTag = 'VYRN';
 
     if (badgeTag) {
       const cleanBadge = badgeTag.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -542,7 +687,7 @@ function memberHasTag(member, tagText = 'VYRN') {
     }
   }
 
-  // 2. Şekilli Font, Emoji, Boşluk ve Sembol Temizleyici (Unicode Normalization)
+  // 3. Şekilli Font, Emoji, Boşluk ve Sembol Temizleyici (Unicode Normalization)
   const normalize = (text) => {
     if (!text || typeof text !== 'string') return '';
     return text
@@ -560,7 +705,7 @@ function memberHasTag(member, tagText = 'VYRN') {
     u.tag || ''
   ];
 
-  // 3. İsim ve Kullanıcı Adında Doğrudan veya Şekilli VYRN / Vyron Kontrolü
+  // 4. İsim ve Kullanıcı Adında Doğrudan veya Şekilli VYRN / Vyron Kontrolü
   for (const raw of rawTexts) {
     if (!raw) continue;
     const lowerRaw = raw.toLowerCase();
@@ -580,7 +725,7 @@ function memberHasTag(member, tagText = 'VYRN') {
     }
   }
 
-  // 4. Özel Durum (Custom Status / Biyografi / Aktivite) Kontrolü
+  // 5. Özel Durum (Custom Status / Biyografi / Aktivite) Kontrolü
   const activities = member.presence?.activities || [];
   for (const act of activities) {
     const stateText = act.state || act.name || act.details || '';
@@ -1773,6 +1918,10 @@ client.once('ready', async () => {
     console.log('⚡ Tüm komutlar sunuculara anında yükleniyor...');
     const guilds = await client.guilds.fetch();
     for (const [guildId] of guilds) {
+      const g = await client.guilds.fetch(guildId).catch(() => null);
+      if (g) {
+        await syncDataFromDiscordCloud(g);
+      }
       await rest.put(
         Routes.applicationGuildCommands(client.user.id, guildId),
         { body: commands.map(cmd => cmd.toJSON()) }
@@ -1797,6 +1946,7 @@ client.once('ready', async () => {
       const guilds = client.guilds.cache;
       for (const [_, guild] of guilds) {
         await updateStaffLeaderboard(guild).catch(() => {});
+        await syncDataToDiscordCloud(guild).catch(() => {});
       }
       await checkNightlyShiftReset().catch(() => {});
     }, 3 * 60 * 1000);
@@ -1815,6 +1965,57 @@ client.on('guildCreate', async (guild) => {
   } catch (err) {
     console.error('Sunucu komut yükleme hatası:', err);
   }
+});
+
+// 4.1. Discord Gateway Raw Olaylarından Gerçek Clan Rozetlerini (⚡ VYRN) Yakalama & Anlık Tag Kontrolü
+client.on('raw', async (packet) => {
+  try {
+    if (!packet || !packet.d) return;
+    const d = packet.d;
+
+    if (packet.t === 'GUILD_MEMBER_UPDATE' || packet.t === 'GUILD_MEMBER_ADD') {
+      const uId = d.user?.id;
+      if (uId) {
+        const clanTag = d.user?.clan?.tag || d.clan?.tag || d.user?.clan_tag;
+        if (clanTag) {
+          rawClanTagsCache.set(uId, clanTag);
+        } else {
+          rawClanTagsCache.delete(uId);
+        }
+        const guild = client.guilds.cache.get(d.guild_id);
+        if (guild) {
+          const member = await guild.members.fetch(uId).catch(() => null);
+          if (member) {
+            await handleTagCheck(null, member);
+          }
+        }
+      }
+    } else if (packet.t === 'USER_UPDATE' || packet.t === 'PRESENCE_UPDATE') {
+      const uId = d.user?.id || d.id;
+      if (uId) {
+        const clanTag = d.user?.clan?.tag || d.clan?.tag || d.user?.clan_tag;
+        if (clanTag) {
+          rawClanTagsCache.set(uId, clanTag);
+        } else {
+          rawClanTagsCache.delete(uId);
+        }
+        for (const [_, guild] of client.guilds.cache) {
+          const member = await guild.members.fetch(uId).catch(() => null);
+          if (member) {
+            await handleTagCheck(null, member);
+          }
+        }
+      }
+    } else if (packet.t === 'GUILD_MEMBERS_CHUNK' && Array.isArray(d.members)) {
+      for (const m of d.members) {
+        const uId = m.user?.id;
+        const clanTag = m.user?.clan?.tag || m.clan?.tag || m.user?.clan_tag;
+        if (uId && clanTag) {
+          rawClanTagsCache.set(uId, clanTag);
+        }
+      }
+    }
+  } catch (e) {}
 });
 
 // ==========================================
@@ -2086,15 +2287,13 @@ client.on('messageCreate', async (message) => {
       saveData(data);
     }
 
-    // 🎒 Gear Verme Takibi (#gear-verilenler-ekip kanalında SS atan yetkililer - her görsel 1 gear sayılır)
+    // 🎒 Gear Verme Takibi (SADECE #gear-verilenler-ekip veya ayarlanan gear kanalı)
     const isGearChannel = (data.gearLogChannelId && message.channel.id === data.gearLogChannelId) ||
+                          channelName.includes('gear-verilenler-ekip') ||
                           channelName.includes('gear-verilenler') ||
                           channelName.includes('gear-verilen') ||
-                          channelName.includes('verilenler') ||
-                          channelName.includes('gear') ||
-                          channelName.includes('ekip') ||
-                          channelName.includes('set-verme') ||
-                          channelName.includes('set-log');
+                          (channelName.includes('gear') && channelName.includes('ekip')) ||
+                          (channelName.includes('gear') && channelName.includes('verilen'));
     if (isStaffTrackingLive() && isGearChannel && isStaffMember(message.member, data)) {
       const hasImage = message.attachments.some(att =>
         (att.contentType && att.contentType.startsWith('image/')) ||
@@ -3926,6 +4125,9 @@ client.on('interactionCreate', async (interaction) => {
         const data = loadData();
         if (!data.tagUsers) data.tagUsers = {};
 
+        // Discord REST API'den tüm üyelerin gerçek klan rozetlerini (⚡ VYRN) çek
+        await refreshGuildClanTags(guild);
+
         const members = await guild.members.fetch().catch(() => guild.members.cache);
         let tagCount = 0;
         let totalTargetCount = 0;
@@ -4807,6 +5009,7 @@ client.on('interactionCreate', async (interaction) => {
         // data zaten yukarıda yüklendi
 
         await interaction.deferReply({ ephemeral: true });
+        await refreshGuildClanTags(guild);
 
         const members = await guild.members.fetch().catch(() => guild.members.cache);
         let warnedCount = 0;
