@@ -420,19 +420,31 @@ async function getOrCreateTourneyChannel(guild) {
   }
 }
 
-// 5. Sadece Yöneticilerin Görebileceği #temiz-log Kanalı
+// 5. Yetkililerin Görebileceği #temiz-log Kanalı
 async function getOrCreateCleanLogChannel(guild) {
   try {
+    const data = loadData();
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
     let ch = channels.find(c => c && c.type === ChannelType.GuildText && (c.name.includes('temiz-log') || c.name.includes('onay-log')));
     if (!ch) {
+      const permissionOverwrites = [
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageChannels] }
+      ];
+      const allStaffRoleIds = getAllStaffRoleIdsForGuild(guild, data);
+      allStaffRoleIds.forEach(roleId => {
+        const r = guild.roles.cache.get(roleId);
+        if (r) {
+          permissionOverwrites.push({
+            id: roleId,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages]
+          });
+        }
+      });
       ch = await guild.channels.create({
         name: '✅・temiz-log',
         type: ChannelType.GuildText,
-        permissionOverwrites: [
-          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageChannels] }
-        ]
+        permissionOverwrites
       });
     }
     return ch;
@@ -442,19 +454,31 @@ async function getOrCreateCleanLogChannel(guild) {
   }
 }
 
-// 6. Sadece Yöneticilerin Görebileceği #hile-log Kanalı
+// 6. Yetkililerin Görebileceği #hile-log Kanalı
 async function getOrCreateCheatLogChannel(guild) {
   try {
+    const data = loadData();
     const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
     let ch = channels.find(c => c && c.type === ChannelType.GuildText && (c.name.includes('hile-log') || c.name.includes('kont-edilen') || c.name.includes('kont-log')));
     if (!ch) {
+      const permissionOverwrites = [
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageChannels] }
+      ];
+      const allStaffRoleIds = getAllStaffRoleIdsForGuild(guild, data);
+      allStaffRoleIds.forEach(roleId => {
+        const r = guild.roles.cache.get(roleId);
+        if (r) {
+          permissionOverwrites.push({
+            id: roleId,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages]
+          });
+        }
+      });
       ch = await guild.channels.create({
         name: '🚫・hile-log',
         type: ChannelType.GuildText,
-        permissionOverwrites: [
-          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageChannels] }
-        ]
+        permissionOverwrites
       });
     }
     return ch;
@@ -545,78 +569,126 @@ function memberHasTag(member, tagText = 'VYRN') {
   return false;
 }
 
-// 6.3. Ticket / Başvuru Açılışında D.Admin Altındaki Tüm Yetkilileri Etiketleme (Yönetici, Admin, D.Admin hariç)
-function getPingableStaffRoles(guild, data) {
+// 6.3. Sunucudaki Tüm Yetkili Rollerini (JSON + Otomatik İsim Eşleşmesi) Kalıcı Olarak Toplama
+function getAllStaffRoleIdsForGuild(guild, data) {
   const staffRoleIds = new Set([
     ...(data?.staffRoleIds || []),
     ...(data?.ticketStaffRoleIds || []),
     ...(data?.aboneStaffRoleIds || [])
   ]);
 
-  const keywords = ['yetkili', 'mod', 'denet', 'aac', 'yardımcı', 'yardimci', 'sr.', 'staff', 'destek', 'üst yetkili', 'ust yetkili', 'd.mod', 'd-mod', 'd.yardımcı', 'd-yardimci'];
+  const staffKeywords = [
+    'yetkili', 'mod', 'admin', 'denet', 'aac', 'yardımcı', 'yardimci',
+    'sr.', 'staff', 'destek', 'üst yetkili', 'ust yetkili',
+    'd.mod', 'd-mod', 'd.admin', 'd-admin', 'd.yardımcı', 'd-yardimci'
+  ];
 
-  guild.roles.cache.forEach(role => {
-    const name = role.name.toLowerCase();
-    // Yönetici, Admin, D.Admin, Kurucu, Owner etiketlenmez
-    if (name.includes('yönetici') || name.includes('yonetici') || name.includes('admin') || name.includes('kurucu') || name.includes('owner') || name.includes('d.admin') || name.includes('d-admin')) {
-      return;
-    }
-    if (keywords.some(kw => name.includes(kw))) {
-      staffRoleIds.add(role.id);
-    }
-  });
+  if (guild && guild.roles && guild.roles.cache) {
+    guild.roles.cache.forEach(role => {
+      const name = role.name.toLowerCase();
+      if (staffKeywords.some(kw => name.includes(kw))) {
+        staffRoleIds.add(role.id);
+      }
+    });
+  }
 
   return Array.from(staffRoleIds);
 }
 
-// 7. Yetkili / Yönetici Kontrolü (Tüm Yetkili Rollerini ve Yetkileri Tanır)
+// 6.4. Ticket / Başvuru Açılışında D.Admin Altındaki Tüm Yetkilileri Etiketleme (Yönetici, Admin, D.Admin hariç)
+function getPingableStaffRoles(guild, data) {
+  const allStaffIds = getAllStaffRoleIdsForGuild(guild, data);
+  const pingableList = [];
+
+  for (const roleId of allStaffIds) {
+    const role = guild.roles.cache.get(roleId);
+    if (!role) continue;
+    const name = role.name.toLowerCase();
+    // Yönetici, Admin, D.Admin, Kurucu, Owner etiketlenmez
+    if (name.includes('yönetici') || name.includes('yonetici') || name.includes('admin') || name.includes('kurucu') || name.includes('owner') || name.includes('d.admin') || name.includes('d-admin')) {
+      continue;
+    }
+    pingableList.push(roleId);
+  }
+
+  return pingableList;
+}
+
+// 7. Yetkili / Yönetici Kontrolü (Tüm Yetkili Rollerini ve Yetkileri Güvenle Tanır)
 function isStaffMember(member, data) {
-  if (!member || !member.roles) return false;
-  if (member.permissions.has(PermissionFlagsBits.Administrator) ||
-      member.permissions.has(PermissionFlagsBits.ManageGuild) ||
-      member.permissions.has(PermissionFlagsBits.ManageRoles) ||
-      member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
-      member.permissions.has(PermissionFlagsBits.KickMembers) ||
-      member.permissions.has(PermissionFlagsBits.BanMembers) ||
-      member.permissions.has(PermissionFlagsBits.ManageMessages)) return true;
+  if (!member) return false;
 
-  const allStaffRoles = [
-    ...(data?.staffRoleIds || []),
-    ...(data?.ticketStaffRoleIds || []),
-    ...(data?.aboneStaffRoleIds || [])
-  ];
+  // 1. İzin kontrolü (Permissions)
+  if (member.permissions && typeof member.permissions.has === 'function') {
+    if (member.permissions.has(PermissionFlagsBits.Administrator) ||
+        member.permissions.has(PermissionFlagsBits.ManageGuild) ||
+        member.permissions.has(PermissionFlagsBits.ManageRoles) ||
+        member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
+        member.permissions.has(PermissionFlagsBits.KickMembers) ||
+        member.permissions.has(PermissionFlagsBits.BanMembers) ||
+        member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      return true;
+    }
+  }
 
-  if (member.roles.cache.some(r => allStaffRoles.includes(r.id))) return true;
+  // 2. Rol ID'lerini topla (hem cache'den hem raw array'den güvenle alır)
+  const guild = member.guild;
+  const userRoleIds = Array.isArray(member.roles)
+    ? member.roles
+    : (member.roles?.cache ? Array.from(member.roles.cache.keys()) : []);
 
+  if (userRoleIds.length === 0) return false;
+
+  // 3. Sunucudaki tüm yetkili rolleriyle eşleştir
+  const allStaffRoleIds = getAllStaffRoleIdsForGuild(guild, data);
+  if (userRoleIds.some(id => allStaffRoleIds.includes(id))) return true;
+
+  // 4. İsim bazlı anahtar kelime eşleşmesi
   const staffKeywords = [
     'yetkili', 'mod', 'admin', 'denet', 'aac', 'yardımcı', 'yardimci',
     'sr.', 'kurucu', 'ekip', 'staff', 'destek', 'üst yetkili', 'ust yetkili',
-    'd.mod', 'd.admin', 'd.yardımcı', 'd-admin', 'd-mod', 'd-yardimci'
+    'd.mod', 'd-mod', 'd.admin', 'd-admin', 'd.yardımcı', 'd-yardimci', 'yonetici', 'yönetici'
   ];
 
-  return member.roles.cache.some(r => {
-    const rName = r.name.toLowerCase();
-    return staffKeywords.some(kw => rName.includes(kw));
-  });
+  if (guild && guild.roles && guild.roles.cache) {
+    return userRoleIds.some(id => {
+      const role = guild.roles.cache.get(id);
+      if (!role) return false;
+      const rName = role.name.toLowerCase();
+      return staffKeywords.some(kw => rName.includes(kw));
+    });
+  }
+
+  return false;
 }
 
 // 7.1. Tag Zorunlu Olan Kadroyu Kontrol Etme (Komutla eklenen roller veya Klan & Yetkili kadrosu)
 function isClanOrStaffMember(member, data) {
-  if (!member || !member.roles) return false;
-  
-  // 1. Yönetici komutuyla eklenen zorunlu tag rolleri varsa doğrudan onları denetle
-  const requiredRoleIds = data?.tagRequiredRoleIds || [];
-  if (requiredRoleIds.length > 0) {
-    return member.roles.cache.some(r => requiredRoleIds.includes(r.id));
-  }
-
-  // 2. Özel rol eklenmediyse varsayılan olarak Yetkili ve Klan Üyelerini denetle
+  if (!member) return false;
   if (isStaffMember(member, data)) return true;
 
-  return member.roles.cache.some(r => {
-    const name = r.name.toLowerCase();
-    return name.includes('klan üye') || name.includes('has klan') || name.includes('klan') || (data?.clanRoleId && r.id === data.clanRoleId);
-  });
+  const guild = member.guild;
+  const userRoleIds = Array.isArray(member.roles)
+    ? member.roles
+    : (member.roles?.cache ? Array.from(member.roles.cache.keys()) : []);
+
+  // 1. Yönetici komutuyla eklenen zorunlu tag rolleri
+  const requiredRoleIds = data?.tagRequiredRoleIds || [];
+  if (requiredRoleIds.length > 0) {
+    return userRoleIds.some(id => requiredRoleIds.includes(id));
+  }
+
+  // 2. Klan rolleri
+  if (guild && guild.roles && guild.roles.cache) {
+    return userRoleIds.some(id => {
+      const r = guild.roles.cache.get(id);
+      if (!r) return false;
+      const name = r.name.toLowerCase();
+      return name.includes('klan üye') || name.includes('has klan') || name.includes('klan') || (data?.clanRoleId && r.id === data.clanRoleId);
+    });
+  }
+
+  return false;
 }
 
 // Süre Biçimlendirme (Saat & Dakika)
@@ -1946,7 +2018,7 @@ client.on('messageCreate', async (message) => {
     const claimInfo = activeClaimedTickets.get(message.channel.id);
     if (isTicketChannel && claimInfo) {
       const isClaimedStaff = message.author.id === claimInfo.claimedBy;
-      const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
+      const isAdmin = message.member?.permissions?.has(PermissionFlagsBits.Administrator) || false;
       const isStaff = isStaffMember(message.member, data);
 
       if (isStaff && !isClaimedStaff && !isAdmin) {
@@ -3995,18 +4067,21 @@ client.on('interactionCreate', async (interaction) => {
         { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
       ];
 
-      // Tüm yetkili rollerine görünürlük ver (ticket + başvuru + abone yetkilileri)
-      const allStaffRoleIds = [...new Set([
-        ...(data.ticketStaffRoleIds || []),
-        ...(data.staffRoleIds || []),
-        ...(data.aboneStaffRoleIds || [])
-      ])];
+      // Tüm yetkili rollerine otomatik kalıcı görünürlük ve yönetim yetkisi ver
+      const allStaffRoleIds = getAllStaffRoleIdsForGuild(guild, data);
       allStaffRoleIds.forEach(roleId => {
         const r = guild.roles.cache.get(roleId);
         if (r) {
           permissionOverwrites.push({
             id: roleId,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ManageChannels]
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+              PermissionFlagsBits.ManageChannels
+            ]
           });
         }
       });
@@ -4349,18 +4424,21 @@ client.on('interactionCreate', async (interaction) => {
         { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
       ];
 
-      // Tüm yetkili rollerine görünürlük ver (başvuru + ticket + abone yetkilileri)
-      const allStaffRoleIds = [...new Set([
-        ...(data.staffRoleIds || []),
-        ...(data.ticketStaffRoleIds || []),
-        ...(data.aboneStaffRoleIds || [])
-      ])];
+      // Tüm yetkili rollerine otomatik kalıcı görünürlük ve yönetim yetkisi ver
+      const allStaffRoleIds = getAllStaffRoleIdsForGuild(guild, data);
       allStaffRoleIds.forEach(roleId => {
         const r = guild.roles.cache.get(roleId);
         if (r) {
           permissionOverwrites.push({
             id: roleId,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ManageChannels]
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+              PermissionFlagsBits.ManageChannels
+            ]
           });
         }
       });
@@ -4766,8 +4844,9 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const member = await guild.members.fetch(interaction.user.id).catch(() => null);
-        if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
-          return interaction.reply({ content: '❌ Bu işlemi yalnızca sunucu yöneticileri yapabilir!', ephemeral: true });
+        const data = loadData();
+        if (!member || (!member.permissions.has(PermissionFlagsBits.Administrator) && !isStaffMember(member, data))) {
+          return interaction.reply({ content: '❌ Bu işlemi yalnızca sunucu yöneticileri ve yetkililer yapabilir!', ephemeral: true });
         }
 
         await interaction.deferReply({ ephemeral: true });
