@@ -545,19 +545,28 @@ function memberHasTag(member, tagText = 'VYRN') {
   return false;
 }
 
-// 6.3. Ticket / Başvuru Açılışında Yalnızca D.Admin Altındaki Yetkilileri Etiketleme (Yönetici, Admin, D.Admin hariç)
-function getPingableStaffRoles(guild, roleIds) {
-  if (!roleIds || !Array.isArray(roleIds)) return [];
-  return roleIds.filter(id => {
-    const role = guild.roles.cache.get(id);
-    if (!role) return false;
+// 6.3. Ticket / Başvuru Açılışında D.Admin Altındaki Tüm Yetkilileri Etiketleme (Yönetici, Admin, D.Admin hariç)
+function getPingableStaffRoles(guild, data) {
+  const staffRoleIds = new Set([
+    ...(data?.staffRoleIds || []),
+    ...(data?.ticketStaffRoleIds || []),
+    ...(data?.aboneStaffRoleIds || [])
+  ]);
+
+  const keywords = ['yetkili', 'mod', 'denet', 'aac', 'yardımcı', 'yardimci', 'sr.', 'staff', 'destek', 'üst yetkili', 'ust yetkili', 'd.mod', 'd-mod', 'd.yardımcı', 'd-yardimci'];
+
+  guild.roles.cache.forEach(role => {
     const name = role.name.toLowerCase();
-    // Yönetici, Admin, D.Admin, D-Admin, Kurucu, Owner etiketlenmez
-    if (name.includes('yönetici') || name.includes('admin') || name.includes('d.admin') || name.includes('d-admin') || name.includes('kurucu') || name.includes('owner')) {
-      return false;
+    // Yönetici, Admin, D.Admin, Kurucu, Owner etiketlenmez
+    if (name.includes('yönetici') || name.includes('yonetici') || name.includes('admin') || name.includes('kurucu') || name.includes('owner') || name.includes('d.admin') || name.includes('d-admin')) {
+      return;
     }
-    return true;
+    if (keywords.some(kw => name.includes(kw))) {
+      staffRoleIds.add(role.id);
+    }
   });
+
+  return Array.from(staffRoleIds);
 }
 
 // 7. Yetkili / Yönetici Kontrolü (Tüm Yetkili Rollerini ve Yetkileri Tanır)
@@ -4037,9 +4046,13 @@ client.on('interactionCreate', async (interaction) => {
           .setEmoji('🗑️')
       );
 
-      const pingableTicketStaffIds = getPingableStaffRoles(guild, ticketStaffRoleIds);
-      const staffPings = pingableTicketStaffIds.map(id => `<@&${id}>`).join(' ');
-      await ticketChannel.send({ content: `${applicant} ${staffPings}`, embeds: [insideEmbed], components: [closeRow] });
+      const pingableTicketStaffIds = getPingableStaffRoles(guild, data);
+      const staffPings = pingableTicketStaffIds.length > 0 ? pingableTicketStaffIds.map(id => `<@&${id}>`).join(' ') : '';
+      await ticketChannel.send({
+        content: `📢 ${applicant} ${staffPings} **Yeni Destek Talebi Açıldı!**`,
+        embeds: [insideEmbed],
+        components: [closeRow]
+      });
 
       return interaction.editReply({ content: `✅ **${catTitle}** odanız **${targetCategory ? targetCategory.name : 'Destek'}** kategorisi altında açıldı: ${ticketChannel}` });
     }
@@ -4411,8 +4424,8 @@ client.on('interactionCreate', async (interaction) => {
           .setStyle(ButtonStyle.Secondary)
       );
 
-      const pingableStaffRoleIds = getPingableStaffRoles(guild, staffRoleIds);
-      const staffPings = pingableStaffRoleIds.map(id => `<@&${id}>`).join(' ');
+      const pingableStaffRoleIds = getPingableStaffRoles(guild, data);
+      const staffPings = pingableStaffRoleIds.length > 0 ? pingableStaffRoleIds.map(id => `<@&${id}>`).join(' ') : '';
       await applyTicketChannel.send({
         content: `📢 ${applicant} ${staffPings} **Yeni Klan Başvuru Talebi Açıldı!**`,
         embeds: [ticketEmbed],
