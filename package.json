@@ -1,6 +1,6 @@
 {
   "name": "discord-allinone-bot",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Ticket, çekiliş, moderasyon, OCR ve topluluk yönetimi özellikli Discord.js botu",
   "main": "index.js",
   "scripts": {

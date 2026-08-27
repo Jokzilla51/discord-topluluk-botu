@@ -1,8 +1,8 @@
-# Vyron Discord Topluluk Botu v2
+# Vyron Discord Topluluk Botu v2.1
 
 Discord.js v14 tabanlı; ticket, klan başvurusu, moderasyon, çekiliş, anket, yetkili istatistiği, seviye, güvenlik ve OCR ile YouTube abonelik kontrolünü tek botta birleştiren topluluk botu.
 
-## v2 ile düzeltilen önemli sorunlar
+## v2.1 ile düzeltilen önemli sorunlar
 
 - XP ve `guvenlik-modu` artık her veri kaydında silinmiyor.
 - JSON verisi geçici dosya + yeniden adlandırma yöntemiyle güvenli kaydediliyor; yeni alanlar şema dönüşümünde korunuyor.
@@ -11,7 +11,13 @@ Discord.js v14 tabanlı; ticket, klan başvurusu, moderasyon, çekiliş, anket, 
 - Ticket kapatma işlemi yalnızca talep sahibi veya yetkili tarafından yapılabiliyor.
 - Ticket sahibi kanal konusuna ve veri deposuna kaydediliyor; kapanan ticket kayıtları temizleniyor.
 - Tag şartı tekrar gerçek rol/tag kontrolü yapıyor; artık koşulsuz `true` değil.
+- `/tag-ayarla` ve `/tag-tara` eklendi. Tarama yalnızca Klan Üyesi, Has Klan Üyesi ve Yetkili kadrosunu kontrol eder; normal üyeleri dışarıda bırakır.
+- `/tag-tara`, `ϟVYRN` tagını takanları ve takmayanları ayrı listeler. Yönetici isterse sonuçtaki butonla tagı olmayanlara DM uyarısı gönderir; butona basılmadan mesaj gönderilmez ve hiçbir rol otomatik değiştirilmez.
 - Ses mesaisi bütün üyeler yerine yalnızca yetkililer için tutuluyor.
+- Yetkili sıralaması, denetimi ve bireysel raporlarında günlük/haftalık/toplam sayaçlar artık birbirinin yerine kullanılmıyor; gerçek `0` değerleri korunuyor.
+- Sunucudan ayrılmış ya da artık yetkili olmayan eski istatistik sahipleri sıralama ve denetime alınmıyor.
+- `mod` metnini içeren “model/modern” gibi alakasız rollerin yetkili sayılmasına yol açan rol eşleşmesi düzeltildi.
+- Kalabalık yetkili listelerinin Discord embed sınırını aşarak komutu bozması önlendi.
 - Raid, spam, XP bekleme ve AFK anahtarları sunucu bazında ayrıldı.
 - Bot açılır açılmaz izinsiz rol/kanal oluşturma kaldırıldı. Otomatik kurulum yalnızca komutla veya açıkça etkinleştirildiğinde çalışır.
 - Komutlar her sunucuya tek tek basılmak yerine global veya seçili geliştirme sunucusu kapsamıyla kaydediliyor.
@@ -70,11 +76,11 @@ Bu komut sözdizimi kontrolünü, ESLint'i ve Node testlerini çalıştırır. T
 - Etkinlik: `/cekilis`, `/reroll`, `/anket`, `/turnuva-duyuru`, `/duyuru`
 - Moderasyon: `/mute`, `/unmute`, `/kick`, `/ban`, `/sil`, `/kilit`, `/yavas-mod`, `/sicil`
 - Yetkili yönetimi: `/yetkili-siralama`, `/yetkili-siralama-kur`, `/yetkili-denetim`, `/yetkili-inaktif`, `/yetkili-rapor`, `/yetkili-terfi`, `/gunluk-rapor`
-- Topluluk: `/seviye`, `/top-seviye`, `/afk`, `/dogrulama-kur`, `/bildirim-rol-kur`, `/haftanin-oyuncusu`
+- Topluluk: `/seviye`, `/top-seviye`, `/afk`, `/dogrulama-kur`, `/bildirim-rol-kur`, `/haftanin-oyuncusu`, `/tag-ayarla`, `/tag-tara`
 - Sistem: `/yardim`, `/sunucu-analiz`, `/sunucu-bilgi`, `/sunucu-istatistik`, `/kullanici-bilgi`, `/guvenlik-modu`, `/otomatik-kurulum`
 - Abone/OCR: `/abone-kur`, `/abone-kanal`
 
-Bot toplam 44 slash komutu kaydeder. Komutların seçenekleri ve gerekli yetkileri Discord komut arayüzünde gösterilir.
+Bot toplam 46 slash komutu kaydeder. Komutların seçenekleri ve gerekli yetkileri Discord komut arayüzünde gösterilir.
 
 ## Kalıcı veri ve yedekleme
 

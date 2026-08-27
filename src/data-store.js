@@ -11,13 +11,14 @@ const DEFAULT_DATA = Object.freeze({
   applyCategoryId: null,
   ticketCategoryId: null,
   clanRoleId: null,
+  hasClanRoleId: null,
   aboneRoleId: null,
   aboneLogChannelId: null,
   staffStats: {},
   staffLeaderboardChannelId: null,
   staffLeaderboardMessageId: null,
   lastDailyResetDate: '',
-  tagText: 'VYRN',
+  tagText: 'ϟVYRN',
   tagLogChannelId: null,
   tagRoleId: null,
   tagRequiredRoleIds: [],
@@ -63,6 +64,9 @@ function normalizeData(value) {
   }
 
   normalized.securityMode = normalized.securityMode !== false;
+  if (!String(parsed.tagText || '').trim() || parsed.tagText === 'VYRN') {
+    normalized.tagText = 'ϟVYRN';
+  }
   normalized.applicationCounter = Number.isInteger(normalized.applicationCounter) && normalized.applicationCounter > 0
     ? normalized.applicationCounter
     : 1;

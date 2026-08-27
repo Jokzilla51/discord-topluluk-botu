@@ -28,7 +28,7 @@ const {
   serializeGiveaway,
   serializePoll
 } = require('./src/runtime-state');
-const { ensureStaffStats } = require('./src/staff-stats');
+const { ensureStaffStats, getPeriodMetrics, normalizeStaffStats } = require('./src/staff-stats');
 let Tesseract = null;
 let ocrQueue = Promise.resolve();
 let ocrQueueDepth = 0;
@@ -243,6 +243,7 @@ const userMessageHistory = new Map();
 const userAfkData = new Map();
 const joinTimestampsByGuild = new Map();
 const activeAnnouncementAcks = new Map();
+const pendingTagScans = new Map();
 
 // Level & XP Hesaplama Fonksiyonları
 function getLevelFromXP(xp = 0) {
@@ -282,6 +283,9 @@ const memoryCleanupTimer = setInterval(() => {
       if (!client.channels.cache.has(chId)) {
         activeClaimedTickets.delete(chId);
       }
+    }
+    for (const [scanId, scan] of pendingTagScans.entries()) {
+      if (now - scan.createdAt > 30 * 60 * 1000) pendingTagScans.delete(scanId);
     }
   } catch (e) {}
 }, 30 * 60 * 1000);
@@ -645,7 +649,29 @@ async function getOrCreateCheatLogChannel(guild) {
 
 
 
-// 6.3. Sunucudaki Tüm Yetkili Rollerini (JSON + Otomatik İsim Eşleşmesi) Kalıcı Olarak Toplama
+function normalizeRoleName(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/ı/g, 'i')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function isLikelyStaffRoleName(roleName) {
+  const normalizedName = normalizeRoleName(roleName);
+  if (!normalizedName) return false;
+
+  const phrases = [
+    'yetkili', 'mod', 'moderator', 'moderatör', 'admin', 'denetmen', 'denetci',
+    'denetçi', 'denetim', 'aac', 'yardimci', 'kurucu', 'staff', 'yonetici',
+    'yönetici', 'ust yetkili', 'üst yetkili'
+  ];
+  const paddedName = ` ${normalizedName} `;
+  return phrases.some(phrase => paddedName.includes(` ${normalizeRoleName(phrase)} `));
+}
+
+// 6.3. Sunucudaki Tüm Yetkili Rollerini (JSON + güvenli isim eşleşmesi) toplama
 function getAllStaffRoleIdsForGuild(guild, data) {
   const staffRoleIds = new Set([
     ...(data?.staffRoleIds || []),
@@ -653,16 +679,9 @@ function getAllStaffRoleIdsForGuild(guild, data) {
     ...(data?.aboneStaffRoleIds || [])
   ]);
 
-  const staffKeywords = [
-    'yetkili', 'mod', 'admin', 'denet', 'aac', 'yardımcı', 'yardimci',
-    'sr.', 'staff', 'destek', 'üst yetkili', 'ust yetkili',
-    'd.mod', 'd-mod', 'd.admin', 'd-admin', 'd.yardımcı', 'd-yardimci'
-  ];
-
   if (guild && guild.roles && guild.roles.cache) {
     guild.roles.cache.forEach(role => {
-      const name = role.name.toLowerCase();
-      if (staffKeywords.some(kw => name.includes(kw))) {
+      if (isLikelyStaffRoleName(role.name)) {
         staffRoleIds.add(role.id);
       }
     });
@@ -701,8 +720,7 @@ function isStaffMember(member, data) {
         member.permissions.has(PermissionFlagsBits.ManageRoles) ||
         member.permissions.has(PermissionFlagsBits.ModerateMembers) ||
         member.permissions.has(PermissionFlagsBits.KickMembers) ||
-        member.permissions.has(PermissionFlagsBits.BanMembers) ||
-        member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+        member.permissions.has(PermissionFlagsBits.BanMembers)) {
       return true;
     }
   }
@@ -718,22 +736,6 @@ function isStaffMember(member, data) {
   // 3. Sunucudaki tüm yetkili rolleriyle eşleştir
   const allStaffRoleIds = getAllStaffRoleIdsForGuild(guild, data);
   if (userRoleIds.some(id => allStaffRoleIds.includes(id))) return true;
-
-  // 4. İsim bazlı anahtar kelime eşleşmesi
-  const staffKeywords = [
-    'yetkili', 'mod', 'admin', 'denet', 'aac', 'yardımcı', 'yardimci',
-    'sr.', 'kurucu', 'ekip', 'staff', 'destek', 'üst yetkili', 'ust yetkili',
-    'd.mod', 'd-mod', 'd.admin', 'd-admin', 'd.yardımcı', 'd-yardimci', 'yonetici', 'yönetici'
-  ];
-
-  if (guild && guild.roles && guild.roles.cache) {
-    return userRoleIds.some(id => {
-      const role = guild.roles.cache.get(id);
-      if (!role) return false;
-      const rName = role.name.toLowerCase();
-      return staffKeywords.some(kw => rName.includes(kw));
-    });
-  }
 
   return false;
 }
@@ -755,6 +757,39 @@ function getModerationBlockReason(actor, target, capability) {
   }
 
   return null;
+}
+
+function normalizeTagValue(value) {
+  return String(value || '').normalize('NFKC').trim().toLocaleLowerCase('tr-TR');
+}
+
+function memberHasConfiguredTag(member, tagText) {
+  const normalizedTag = normalizeTagValue(tagText).replace(/\s+/g, '');
+  if (!normalizedTag) return false;
+
+  const names = [
+    member.user?.username,
+    member.user?.globalName,
+    member.nickname,
+    member.displayName
+  ];
+  return names.some(name => normalizeTagValue(name).replace(/\s+/g, '').includes(normalizedTag));
+}
+
+function isTagScanTarget(member, data) {
+  if (!member || member.user?.bot) return false;
+
+  const configuredRoleIds = new Set([
+    data.clanRoleId,
+    data.hasClanRoleId
+  ].filter(Boolean));
+  if ([...configuredRoleIds].some(roleId => member.roles.cache.has(roleId))) return true;
+  if (isStaffMember(member, data)) return true;
+
+  return member.roles.cache.some(role => {
+    const roleName = normalizeRoleName(role.name);
+    return roleName.includes('klan uye') || roleName.includes('has klan');
+  });
 }
 
 // Süre Biçimlendirme (Saat & Dakika)
@@ -851,11 +886,13 @@ async function autoSetupGuildInfrastructure(guild) {
         reason: 'Vyron Bot Otomatik Altyapı Kurulumu'
       }).catch(() => null);
       if (rHasClan) {
+        data.hasClanRoleId = rHasClan.id;
         if (!data.tagRequiredRoleIds) data.tagRequiredRoleIds = [];
         if (!data.tagRequiredRoleIds.includes(rHasClan.id)) data.tagRequiredRoleIds.push(rHasClan.id);
         createdItems.push(`🏷️ **@Vyron • Has Klan Üyesi** rolü oluşturuldu`);
       }
     } else {
+      data.hasClanRoleId = rHasClan.id;
       if (!data.tagRequiredRoleIds) data.tagRequiredRoleIds = [];
       if (!data.tagRequiredRoleIds.includes(rHasClan.id)) data.tagRequiredRoleIds.push(rHasClan.id);
     }
@@ -1041,7 +1078,19 @@ async function autoSetupGuildInfrastructure(guild) {
     }
 
     // 3.5. TAG LOG KANALI (#🏷️・tag-log)
-    // Tag sistemi kaldırıldı - tag log kanalı artık oluşturulmuyor
+    let chTagLog = channels.find(c => c && c.type === ChannelType.GuildText && c.name.includes('tag-log'));
+    if (!chTagLog) {
+      chTagLog = await guild.channels.create({
+        name: '🏷️・tag-log',
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks] }
+        ]
+      }).catch(() => null);
+      if (chTagLog) createdItems.push(`🏷️ **#🏷️・tag-log** kanalı oluşturuldu`);
+    }
+    if (chTagLog) data.tagLogChannelId = chTagLog.id;
 
     // 3.6. CANLI YETKİLİ SIRALAMASI KANALI (#👑・yetkili-siralama)
     let chLeaderboard = await getOrCreateStaffLeaderboardChannel(guild);
@@ -1141,105 +1190,30 @@ function buildStaffLeaderboardRow(currentPeriod = 'today') {
 // 9.1. Canlı Sıralama Embed'ini Oluşturma Fonksiyonu (Dönemsel Filtreli)
 async function buildStaffLeaderboardEmbed(guild, data, period = 'today') {
   const staffList = [];
-  const members = guild.members.cache.size > 0
+  const members = guild.members.cache.size >= guild.memberCount
     ? guild.members.cache
     : await guild.members.fetch().catch(() => guild.members.cache);
 
   for (const [userId, member] of members) {
     if (member.user.bot) continue;
     const isStaff = isStaffMember(member, data);
-    const hasStats = data.staffStats && data.staffStats[userId] !== undefined;
+    if (!isStaff) continue;
 
-    if (!isStaff && !hasStats) continue;
-
-    const userStats = (data.staffStats && data.staffStats[userId]) || {
-      todayVoice: 0,
-      weeklyVoice: 0,
-      totalVoice: 0,
-      todayTicketMsgs: 0,
-      weeklyTicketMsgs: 0,
-      totalTicketMsgs: 0,
-      todayTicketClaims: 0,
-      weeklyTicketClaims: 0,
-      totalTicketClaims: 0,
-      todayApplyClaims: 0,
-      weeklyApplyClaims: 0,
-      totalApplyClaims: 0,
-      todayAnydeskChecks: 0,
-      weeklyAnydeskChecks: 0,
-      totalAnydeskChecks: 0,
-      todaySolvedTickets: 0,
-      weeklySolvedTickets: 0,
-      totalSolvedTickets: 0,
-      todayGearGiven: 0,
-      weeklyGearGiven: 0,
-      totalGearGiven: 0,
-      voiceJoinedAt: null
-    };
-
-    let voiceTime = 0;
+    const userStats = normalizeStaffStats(data.staffStats?.[userId]);
     let isCurrentlyInVoice = false;
+    let activeVoiceMs = 0;
 
     if (member.voice && member.voice.channelId && member.voice.channelId !== guild.afkChannelId) {
       isCurrentlyInVoice = true;
+      if (userStats.voiceJoinedAt) activeVoiceMs = Math.max(0, Date.now() - userStats.voiceJoinedAt);
     }
 
-    let ticketClaims = 0;
-    let applyClaims = 0;
-    let anydeskChecks = 0;
-    let solvedTickets = 0;
-    let ticketMsgs = 0;
-    let gearGiven = 0;
-
-    if (period === 'weekly') {
-      voiceTime = userStats.weeklyVoice || 0;
-      if (isCurrentlyInVoice && userStats.voiceJoinedAt) voiceTime += (Date.now() - userStats.voiceJoinedAt);
-      ticketClaims = userStats.weeklyTicketClaims || userStats.todayTicketClaims || 0;
-      applyClaims = userStats.weeklyApplyClaims || userStats.todayApplyClaims || 0;
-      anydeskChecks = userStats.weeklyAnydeskChecks || userStats.todayAnydeskChecks || 0;
-      solvedTickets = userStats.weeklySolvedTickets || userStats.todaySolvedTickets || 0;
-      ticketMsgs = userStats.weeklyTicketMsgs || userStats.todayTicketMsgs || 0;
-      gearGiven = userStats.weeklyGearGiven || userStats.todayGearGiven || 0;
-    } else if (period === 'total') {
-      voiceTime = userStats.totalVoice || 0;
-      if (isCurrentlyInVoice && userStats.voiceJoinedAt) voiceTime += (Date.now() - userStats.voiceJoinedAt);
-      ticketClaims = userStats.totalTicketClaims || userStats.weeklyTicketClaims || userStats.todayTicketClaims || 0;
-      applyClaims = userStats.totalApplyClaims || userStats.weeklyApplyClaims || userStats.todayApplyClaims || 0;
-      anydeskChecks = userStats.totalAnydeskChecks || userStats.weeklyAnydeskChecks || userStats.todayAnydeskChecks || 0;
-      solvedTickets = userStats.totalSolvedTickets || userStats.weeklySolvedTickets || userStats.todaySolvedTickets || 0;
-      ticketMsgs = userStats.totalTicketMsgs || userStats.weeklyTicketMsgs || userStats.todayTicketMsgs || 0;
-      gearGiven = userStats.totalGearGiven || userStats.weeklyGearGiven || userStats.todayGearGiven || 0;
-    } else {
-      // 'today'
-      voiceTime = userStats.todayVoice || 0;
-      if (isCurrentlyInVoice && userStats.voiceJoinedAt) voiceTime += (Date.now() - userStats.voiceJoinedAt);
-      ticketClaims = userStats.todayTicketClaims || userStats.todayClaimed || 0;
-      applyClaims = userStats.todayApplyClaims || 0;
-      anydeskChecks = userStats.todayAnydeskChecks || 0;
-      solvedTickets = userStats.todaySolvedTickets || userStats.todayTickets || 0;
-      ticketMsgs = userStats.todayTicketMsgs || 0;
-      gearGiven = userStats.todayGearGiven || 0;
-    }
-
-    const score = Math.floor(voiceTime / 60000) * 2 +
-                  ticketClaims * 20 +
-                  applyClaims * 20 +
-                  anydeskChecks * 30 +
-                  solvedTickets * 25 +
-                  ticketMsgs * 2 +
-                  gearGiven * 15;
+    const metrics = getPeriodMetrics(userStats, period, activeVoiceMs);
 
     staffList.push({
       member,
       userId,
-      voiceTime,
-      ticketClaims,
-      applyClaims,
-      anydeskChecks,
-      solvedTickets,
-      ticketMsgs,
-      gearGiven,
-      score,
+      ...metrics,
       isCurrentlyInVoice
     });
   }
@@ -1283,12 +1257,12 @@ async function buildStaffLeaderboardEmbed(guild, data, period = 'today') {
     .setColor('#8B5CF6')
     .setAuthor({ name: 'Vyron Klan Yönetimi • Canlı Yetkili Mesai & Sıralama', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
     .setTitle(titles[period] || titles.today)
-    .setDescription(
+    .setDescription(truncateDiscordText(
       `${periodDescriptions[period] || periodDescriptions.today}\n\n` +
       `*Yetkililerin ses süreleri, üstlendikleri talepler, ticket mesajları, çözümleri ve gear teslimatları **komutsuz olarak 7/24 otomatik** hesaplanır.*\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       rankText
-    )
+    ))
     .setFooter({ text: `${FOOTER_TEXT} • Butonlarla dönemi değiştirebilirsiniz` })
     .setTimestamp();
 
@@ -1338,21 +1312,21 @@ async function buildDailyStaffRecapEmbed(guild, data) {
   let totalTeamScore = 0;
 
   for (const [userId, stats] of Object.entries(data.staffStats || {})) {
-    const voiceTime = stats.todayVoice || 0;
-    const ticketClaims = stats.todayTicketClaims || stats.todayClaimed || 0;
-    const applyClaims = stats.todayApplyClaims || 0;
-    const anydeskChecks = stats.todayAnydeskChecks || 0;
-    const solvedTickets = stats.todaySolvedTickets || stats.todayTickets || 0;
-    const ticketMsgs = stats.todayTicketMsgs || 0;
-    const gearGiven = stats.todayGearGiven || 0;
-
-    const score = Math.floor(voiceTime / 60000) * 2 +
-                  ticketClaims * 20 +
-                  applyClaims * 20 +
-                  anydeskChecks * 30 +
-                  solvedTickets * 25 +
-                  ticketMsgs * 2 +
-                  gearGiven * 15;
+    const member = guild.members.cache.get(userId);
+    if (!member || member.user.bot || !isStaffMember(member, data)) continue;
+    const activeVoiceMs = member.voice?.channelId && member.voice.channelId !== guild.afkChannelId && stats.voiceJoinedAt
+      ? Math.max(0, Date.now() - stats.voiceJoinedAt)
+      : 0;
+    const {
+      voiceTime,
+      ticketClaims,
+      applyClaims,
+      anydeskChecks,
+      solvedTickets,
+      ticketMsgs,
+      gearGiven,
+      score
+    } = getPeriodMetrics(stats, 'today', activeVoiceMs);
 
     totalTeamVoice += voiceTime;
     totalTeamTickets += solvedTickets;
@@ -1407,7 +1381,7 @@ async function buildDailyStaffRecapEmbed(guild, data) {
       iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL()
     })
     .setTitle('🌙 GÜNÜN MESAİSİ TAMAMLANDI • GÜNÜN EN İYİ YETKİLİLERİ')
-    .setDescription(
+    .setDescription(truncateDiscordText(
       `Bugünün yetkili mesaisi saat **00:00 (Gece 12)** itibarıyla tamamlandı ve istatistikler arşive aktarıldı!\n\n` +
       (topStaff ?
         `╭──────────────────────────────────────────────────╮\n` +
@@ -1428,7 +1402,7 @@ async function buildDailyStaffRecapEmbed(guild, data) {
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `📌 *Detaylı yetkili karnesi: \`/yetkili-rapor\` • Canlı liderlik tablosu: \`/yetkili-siralama\`*\n` +
       `💎 *Tüm yetkili ekibimize özverili emekleri için teşekkür ederiz! Yarın sabah 09:00'da yeni vardiya başlayacaktır.* ⚔️🔥`
-    )
+    ))
     .setFooter({ text: `${FOOTER_TEXT} • Otomatik Günlük Kapanış Bülteni` })
     .setTimestamp();
 
@@ -1459,6 +1433,18 @@ async function checkNightlyShiftReset() {
     if (turkeyHour === 0 && data.lastDailyResetDate !== todayStr) {
       data.lastDailyResetDate = todayStr;
 
+      // Gece yarısında devam eden ses oturumunu eski güne/haftaya kadar hesapla,
+      // ardından aynı oturumu yeni dönem için sıfırdan başlat.
+      const resetTimestamp = Date.now();
+      for (const stats of Object.values(data.staffStats || {})) {
+        if (!stats.voiceJoinedAt) continue;
+        const duration = Math.max(0, resetTimestamp - stats.voiceJoinedAt);
+        stats.todayVoice = (stats.todayVoice || 0) + duration;
+        stats.weeklyVoice = (stats.weeklyVoice || 0) + duration;
+        stats.totalVoice = (stats.totalVoice || 0) + duration;
+        stats.voiceJoinedAt = resetTimestamp;
+      }
+
       const guilds = client.guilds.cache;
       for (const guild of guilds.values()) {
         const nightEmbed = await buildDailyStaffRecapEmbed(guild, data);
@@ -1481,13 +1467,9 @@ async function checkNightlyShiftReset() {
           const weeklyRanking = [];
 
           for (const [userId, stats] of Object.entries(data.staffStats || {})) {
-            const weeklyScore = Math.floor((stats.weeklyVoice || 0) / 60000) * 2 +
-                                (stats.weeklyTicketClaims || 0) * 20 +
-                                (stats.weeklyApplyClaims || 0) * 20 +
-                                (stats.weeklyAnydeskChecks || 0) * 30 +
-                                (stats.weeklySolvedTickets || 0) * 25 +
-                                (stats.weeklyTicketMsgs || 0) * 2 +
-                                (stats.weeklyGearGiven || 0) * 15;
+            const member = guild.members.cache.get(userId);
+            if (!member || member.user.bot || !isStaffMember(member, data)) continue;
+            const { score: weeklyScore } = getPeriodMetrics(stats, 'weekly');
 
             if (weeklyScore > 0) {
               weeklyRanking.push({ userId, stats, weeklyScore });
@@ -1509,17 +1491,12 @@ async function checkNightlyShiftReset() {
             });
 
             // İnaktif yetkililer (0 puan)
-            const allStaffIds = Object.keys(data.staffStats);
+            const allStaffIds = guild.members.cache
+              .filter(member => !member.user.bot && isStaffMember(member, data))
+              .map(member => member.id);
             const inactiveList = allStaffIds.filter(uid => {
               const s = data.staffStats[uid];
-              const ws = Math.floor((s.weeklyVoice || 0) / 60000) * 2 +
-                         (s.weeklyTicketClaims || 0) * 20 +
-                         (s.weeklyApplyClaims || 0) * 20 +
-                         (s.weeklyAnydeskChecks || 0) * 30 +
-                         (s.weeklySolvedTickets || 0) * 25 +
-                         (s.weeklyTicketMsgs || 0) * 2 +
-                         (s.weeklyGearGiven || 0) * 15;
-              return ws === 0;
+              return getPeriodMetrics(s, 'weekly').score === 0;
             });
 
             let inactiveText = inactiveList.length > 0 
@@ -1530,7 +1507,7 @@ async function checkNightlyShiftReset() {
               .setColor('#F59E0B')
               .setAuthor({ name: 'Vyron Klan Yönetimi • Haftalık Performans Raporu', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
               .setTitle('📅 HAFTANIN PERFORMANS RAPORU & PERM TABLOSU')
-              .setDescription(
+              .setDescription(truncateDiscordText(
                 `Bu haftanın mesaisi tamamlandı! İşte haftalık performans özeti:\n\n` +
                 `### 🏆 HAFTANIN İLK 10 YETKİLİSİ:\n\n` +
                 weeklyText +
@@ -1543,7 +1520,7 @@ async function checkNightlyShiftReset() {
                 `🟡 **200-499 Puan** → Normal Performans\n` +
                 `🔴 **0-199 Puan** → ⚠️ Perm DOWN Adayı\n\n` +
                 `📌 *Detaylı karne: \`/yetkili-rapor yetkili:@isim\`*`
-              )
+              ))
               .setFooter({ text: FOOTER_TEXT })
               .setTimestamp();
 
@@ -2298,7 +2275,36 @@ const commands = [
     .setName('sunucu-istatistik')
     .setDescription('Sunucunun anlık üye, boost, kanal, klan rolleri ve bot gecikme dashboardunu açar.'),
 
-  // 51. /bildirim-rol-kur
+  // 51. /tag-ayarla
+  new SlashCommandBuilder()
+    .setName('tag-ayarla')
+    .setDescription('Tag taramasında aranacak sunucu tagını ayarlar.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption(option =>
+      option.setName('tag')
+        .setDescription('İsimlerde aranacak tag (Örn: VYRN veya ✦)')
+        .setRequired(true)
+        .setMaxLength(32)
+    )
+    .addRoleOption(option =>
+      option.setName('tag_rolu')
+        .setDescription('Varsa mevcut tag rolü (tarama bu rolü değiştirmez)')
+        .setRequired(false)
+    )
+    .addChannelOption(option =>
+      option.setName('log_kanali')
+        .setDescription('Tag alma/bırakma kayıtlarının gönderileceği kanal')
+        .setRequired(false)
+        .addChannelTypes(ChannelType.GuildText)
+    ),
+
+  // 52. /tag-tara
+  new SlashCommandBuilder()
+    .setName('tag-tara')
+    .setDescription('Klan, Has Klan ve yetkili kadrosunda tagı takanları/takmayanları listeler.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  // 53. /bildirim-rol-kur
   new SlashCommandBuilder()
     .setName('bildirim-rol-kur')
     .setDescription('Üyelerin tek tıkla bildirim rollerini (Duyuru, Çekiliş, Turnuva) seçebileceği paneli kurar.')
@@ -2315,6 +2321,13 @@ function persistGiveaway(giveaway) {
   const data = loadData();
   data.giveaways[giveaway.giveawayId] = serializeGiveaway(giveaway);
   saveData(data);
+}
+
+function truncateDiscordText(value, maxLength = 4096) {
+  const text = String(value || '');
+  if (text.length <= maxLength) return text;
+  const suffix = '\n\n… Liste Discord mesaj sınırı nedeniyle kısaltıldı.';
+  return `${text.slice(0, Math.max(0, maxLength - suffix.length))}${suffix}`;
 }
 
 function persistPoll(poll) {
@@ -2726,6 +2739,57 @@ client.on('guildMemberAdd', async (member) => {
   } catch (e) {
     console.error('guildMemberAdd güvenlik hatası:', e);
   }
+});
+
+// Kadrodan ayrılan veya yetkisi değişen kişinin açık ses oturumunu doğru kapatır.
+client.on('guildMemberRemove', member => {
+  const data = loadData();
+  const stats = data.staffStats?.[member.id];
+  let shouldSave = false;
+
+  if (stats?.voiceJoinedAt) {
+    const duration = Math.max(0, Date.now() - stats.voiceJoinedAt);
+    stats.todayVoice = (stats.todayVoice || 0) + duration;
+    stats.weeklyVoice = (stats.weeklyVoice || 0) + duration;
+    stats.totalVoice = (stats.totalVoice || 0) + duration;
+    stats.voiceJoinedAt = null;
+    shouldSave = true;
+  }
+  if (data.tagUsers?.[member.id]) {
+    delete data.tagUsers[member.id];
+    shouldSave = true;
+  }
+
+  if (shouldSave) saveData(data);
+});
+
+client.on('guildMemberUpdate', (oldMember, newMember) => {
+  if (newMember.user.bot) return;
+
+  const data = loadData();
+  let shouldSave = false;
+  const wasStaff = isStaffMember(oldMember, data);
+  const isStaff = isStaffMember(newMember, data);
+  const stats = data.staffStats?.[newMember.id];
+
+  if (wasStaff && !isStaff && stats?.voiceJoinedAt) {
+    const duration = Math.max(0, Date.now() - stats.voiceJoinedAt);
+    stats.todayVoice = (stats.todayVoice || 0) + duration;
+    stats.weeklyVoice = (stats.weeklyVoice || 0) + duration;
+    stats.totalVoice = (stats.totalVoice || 0) + duration;
+    stats.voiceJoinedAt = null;
+    shouldSave = true;
+  } else if (
+    !wasStaff &&
+    isStaff &&
+    newMember.voice?.channelId &&
+    newMember.voice.channelId !== newMember.guild.afkChannelId
+  ) {
+    ensureStaffStats(data, newMember.id).voiceJoinedAt = Date.now();
+    shouldSave = true;
+  }
+
+  if (shouldSave) saveData(data);
 });
 
 // ==========================================
@@ -3242,7 +3306,9 @@ function buildHelpMenu(category = 'home') {
         { name: '`/yetkili-terfi [yetkili] [islem] [yeni_rol]`', value: 'Yetkiliye Perm UP (Terfi) veya Perm DOWN (İhtar) verir ve duyurur.' },
         { name: '`/yetkili-rapor [yetkili]`', value: 'Seçilen yetkilinin günlük/haftalık karnesini ve sistem tavsiyesini döker.' },
         { name: '`/gunluk-rapor [kanala_gonder]`', value: '00:00 Gün sonu şampiyonluk ve mesai bültenini anında oluşturup yayınlar.' },
-        { name: '`/gear-kanal [kanal]`', value: 'Gear teslimat SS atılacak kanalı (`#gear-verilenler-ekip`) ayarlar.' }
+        { name: '`/gear-kanal [kanal]`', value: 'Gear teslimat SS atılacak kanalı (`#gear-verilenler-ekip`) ayarlar.' },
+        { name: '`/tag-ayarla [tag]`', value: 'Kadro taramasında aranacak sunucu tagını ayarlar.' },
+        { name: '`/tag-tara`', value: 'Yalnızca Klan, Has Klan ve Yetkili kadrosunda tagı takan/takmayanları listeler; istenirse butonla DM uyarısı yollar.' }
       );
   } else if (category === 'clan') {
     embed.setTitle('⚔️ Klan, Minecraft & Sunucu Takip Modülü')
@@ -3412,6 +3478,133 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
+      // /tag-ayarla
+      if (commandName === 'tag-ayarla') {
+        const tagText = interaction.options.getString('tag', true).trim();
+        const tagRole = interaction.options.getRole('tag_rolu');
+        const logChannel = interaction.options.getChannel('log_kanali');
+
+        if (!tagText) {
+          return interaction.reply({ content: '❌ Tag boş olamaz.', ephemeral: true });
+        }
+        if (tagRole?.id === interaction.guild.roles.everyone.id) {
+          return interaction.reply({ content: '❌ `@everyone` tag rolü olarak kullanılamaz.', ephemeral: true });
+        }
+
+        const data = loadData();
+        data.tagText = tagText;
+        if (tagRole) data.tagRoleId = tagRole.id;
+        if (logChannel) data.tagLogChannelId = logChannel.id;
+        saveData(data);
+
+        return interaction.reply({
+          content: `✅ Tarama tagı \`${tagText}\` olarak ayarlandı.\n\n\`/tag-tara\` yalnızca Klan Üyesi, Has Klan Üyesi ve Yetkili kadrosunu raporlar; hiçbir rolü otomatik değiştirmez.`,
+          ephemeral: true
+        });
+      }
+
+      // /tag-tara
+      if (commandName === 'tag-tara') {
+        await interaction.deferReply({ ephemeral: true });
+        const guild = interaction.guild;
+        const data = loadData();
+        const tagText = String(data.tagText || 'ϟVYRN').trim();
+
+        if (!tagText) {
+          return interaction.editReply('❌ Tag ayarı eksik. Önce `/tag-ayarla` komutunu kullanın.');
+        }
+
+        const members = await guild.members.fetch().catch(() => guild.members.cache);
+        const scanTargets = [...members.values()].filter(member => isTagScanTarget(member, data));
+        const taggedMembers = [];
+        const missingMembers = [];
+        if (!data.tagUsers || typeof data.tagUsers !== 'object') data.tagUsers = {};
+
+        for (const member of scanTargets) {
+          const hasTag = memberHasConfiguredTag(member, tagText);
+          (hasTag ? taggedMembers : missingMembers).push(member);
+          data.tagUsers[member.id] = {
+            hasTag,
+            displayName: member.displayName,
+            checkedAt: Date.now()
+          };
+        }
+
+        saveData(data);
+        const previewList = list => {
+          if (list.length === 0) return '*Kimse yok.*';
+          const firstMembers = list.slice(0, 15).map(member => `• ${member}`).join('\n');
+          return truncateDiscordText(
+            firstMembers + (list.length > 15 ? `\n• … ve ${list.length - 15} kişi daha (tam liste dosyada)` : ''),
+            1024
+          );
+        };
+
+        const cleanReportValue = value => String(value || '-').replace(/[\r\n|]+/g, ' ').trim();
+        const reportLines = [
+          `${guild.name} - Tag Tarama Raporu`,
+          `Aranan tag: ${tagText}`,
+          `Tarih: ${new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' })}`,
+          `Kapsam: Klan Üyesi, Has Klan Üyesi ve Yetkililer`,
+          '',
+          `TAGI TAKANLAR (${taggedMembers.length})`,
+          ...taggedMembers.map(member => `${cleanReportValue(member.displayName)} | ${member.user.tag} | ${member.id}`),
+          '',
+          `TAGI TAKMAYANLAR (${missingMembers.length})`,
+          ...missingMembers.map(member => `${cleanReportValue(member.displayName)} | ${member.user.tag} | ${member.id}`)
+        ];
+        const reportFile = {
+          attachment: Buffer.from(`${reportLines.join('\n')}\n`, 'utf8'),
+          name: `tag-tarama-${Date.now()}.txt`
+        };
+
+        const scanEmbed = new EmbedBuilder()
+          .setColor(missingMembers.length > 0 ? '#F59E0B' : '#10B981')
+          .setTitle('🏷️ Tag Taraması Tamamlandı')
+          .setDescription(
+            `**Aranan tag:** \`${tagText}\`\n` +
+            `**Kapsam:** Klan Üyesi, Has Klan Üyesi ve Yetkililer\n\n` +
+            `👥 Taranan kadro: \`${scanTargets.length}\`\n` +
+            `✅ Tagı takan: \`${taggedMembers.length}\`\n` +
+            `⚠️ Tagı takmayan: \`${missingMembers.length}\`\n\n` +
+            `*Normal üyeler taramaya dahil edilmedi. Hiçbir rol değiştirilmedi.*`
+          )
+          .addFields(
+            { name: `✅ Tagı Takanlar (${taggedMembers.length})`, value: previewList(taggedMembers), inline: false },
+            { name: `⚠️ Tagı Takmayanlar (${missingMembers.length})`, value: previewList(missingMembers), inline: false }
+          )
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        const components = [];
+        if (missingMembers.length > 0) {
+          const scanId = randomUUID();
+          pendingTagScans.set(scanId, {
+            createdAt: Date.now(),
+            guildId: guild.id,
+            requesterId: interaction.user.id,
+            missingMemberIds: missingMembers.map(member => member.id),
+            tagText
+          });
+          components.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`btn_tag_warn_${scanId}`)
+              .setLabel(`Tagı Takmayanları DM'den Uyar (${missingMembers.length})`)
+              .setStyle(ButtonStyle.Danger)
+              .setEmoji('📨')
+          ));
+        }
+
+        const logChannel = data.tagLogChannelId ? guild.channels.cache.get(data.tagLogChannelId) : null;
+        if (logChannel?.isTextBased()) {
+          await logChannel.send({ embeds: [scanEmbed], files: [reportFile] }).catch(error => {
+            console.error('Tag tarama özeti gönderilemedi:', error.message);
+          });
+        }
+
+        return interaction.editReply({ embeds: [scanEmbed], components, files: [reportFile] });
+      }
+
       // 4. /yetkili-siralama
       if (commandName === 'yetkili-siralama') {
         await interaction.deferReply({ ephemeral: false });
@@ -3455,64 +3648,31 @@ client.on('interactionCreate', async (interaction) => {
         for (const [userId, member] of members) {
           if (member.user.bot) continue;
           const isStaff = isStaffMember(member, data);
-          const hasStats = data.staffStats[userId] !== undefined;
-          if (!isStaff && !hasStats) continue;
+          if (!isStaff) continue;
 
-          const stats = data.staffStats[userId] || {
-            todayVoice: 0,
-            weeklyVoice: 0,
-            totalVoice: 0,
-            todayTicketMsgs: 0,
-            weeklyTicketMsgs: 0,
-            totalTicketMsgs: 0,
-            todayTicketClaims: 0,
-            weeklyTicketClaims: 0,
-            totalTicketClaims: 0,
-            todayApplyClaims: 0,
-            weeklyApplyClaims: 0,
-            totalApplyClaims: 0,
-            todayAnydeskChecks: 0,
-            weeklyAnydeskChecks: 0,
-            totalAnydeskChecks: 0,
-            todaySolvedTickets: 0,
-            weeklySolvedTickets: 0,
-            totalSolvedTickets: 0,
-            voiceJoinedAt: null
-          };
-
-          let liveVoice = stats.todayVoice || 0;
+          const stats = normalizeStaffStats(data.staffStats[userId]);
           let isInVoice = false;
+          let activeVoiceMs = 0;
           if (member.voice?.channelId && member.voice.channelId !== guild.afkChannelId) {
             isInVoice = true;
             if (stats.voiceJoinedAt) {
-              liveVoice += (Date.now() - stats.voiceJoinedAt);
+              activeVoiceMs = Math.max(0, Date.now() - stats.voiceJoinedAt);
             }
           }
 
-          const dailyScore = Math.floor(liveVoice / 60000) * 2 +
-                             ((stats.todayTicketClaims || stats.todayClaimed || 0) * 20) +
-                             ((stats.todayApplyClaims || 0) * 20) +
-                             ((stats.todayAnydeskChecks || 0) * 30) +
-                             ((stats.todaySolvedTickets || stats.todayTickets || 0) * 25) +
-                             ((stats.todayTicketMsgs || 0) * 2) +
-                             ((stats.todayGearGiven || 0) * 15);
-
-          const weeklyScore = Math.floor(((stats.weeklyVoice || 0) + (liveVoice - (stats.todayVoice || 0))) / 60000) * 2 +
-                              ((stats.weeklyTicketClaims || stats.totalClaimed || 0) * 20) +
-                              ((stats.weeklyApplyClaims || 0) * 20) +
-                              ((stats.weeklyAnydeskChecks || 0) * 30) +
-                              ((stats.weeklySolvedTickets || stats.totalTickets || 0) * 25) +
-                              ((stats.weeklyTicketMsgs || stats.totalTicketMsgs || 0) * 2) +
-                              ((stats.weeklyGearGiven || 0) * 15);
+          const daily = getPeriodMetrics(stats, 'today', activeVoiceMs);
+          const weekly = getPeriodMetrics(stats, 'weekly', activeVoiceMs);
 
           staffList.push({
             member,
             userId,
             stats,
-            liveVoice,
+            daily,
+            weekly,
+            liveVoice: daily.voiceTime,
             isInVoice,
-            dailyScore,
-            weeklyScore
+            dailyScore: daily.score,
+            weeklyScore: weekly.score
           });
         }
 
@@ -3542,34 +3702,29 @@ client.on('interactionCreate', async (interaction) => {
           reportText = staffList.slice(0, 20).map((item, idx) => {
             const voiceStatus = item.isInVoice ? '🟢 **Şu an Seste**' : '⚪ **Boşta**';
             return `**#${idx + 1}** ${item.member} • ${voiceStatus}\n` +
-                   `⏱️ **Bugün Seste:** \`${formatDuration(item.liveVoice)}\` | 🗓️ **Haftalık:** \`${formatDuration(item.stats.weeklyVoice || item.stats.totalVoice || 0)}\``;
+                   `⏱️ **Bugün Seste:** \`${formatDuration(item.daily.voiceTime)}\` | 🗓️ **Haftalık:** \`${formatDuration(item.weekly.voiceTime)}\``;
           }).join('\n\n');
         }
         // FİLTRE 3: DESTEK & TICKET İLGİSİ
         else if (filter === 'ticket') {
           embedTitle = '🎫 DESTEK & TICKET İLGİSİ SIRALAMASI';
           embedColor = '#10B981';
-          staffList.sort((a, b) => ((b.stats.todayTicketClaims || b.stats.todayClaimed || 0) + (b.stats.todayTicketMsgs || 0)) - ((a.stats.todayTicketClaims || a.stats.todayClaimed || 0) + (a.stats.todayTicketMsgs || 0)));
+          staffList.sort((a, b) => (b.daily.ticketClaims + b.daily.ticketMsgs) - (a.daily.ticketClaims + a.daily.ticketMsgs));
 
           reportText = staffList.slice(0, 20).map((item, idx) => {
-            const claims = item.stats.todayTicketClaims || item.stats.todayClaimed || 0;
-            const msgs = item.stats.todayTicketMsgs || 0;
-            const solved = item.stats.todaySolvedTickets || item.stats.todayTickets || 0;
             return `**#${idx + 1}** ${item.member}\n` +
-                   `✋ **Üstlenen Destek:** \`${claims} adet\` • 💬 **Ticket Mesajı:** \`${msgs} adet\` • ✅ **Kapatılan:** \`${solved} adet\``;
+                   `✋ **Üstlenen Destek:** \`${item.daily.ticketClaims} adet\` • 💬 **Ticket Mesajı:** \`${item.daily.ticketMsgs} adet\` • ✅ **Kapatılan:** \`${item.daily.solvedTickets} adet\``;
           }).join('\n\n');
         }
         // FİLTRE 4: BAŞVURU & ANYDESK
         else if (filter === 'basvuru') {
           embedTitle = '⚔️ KLAN BAŞVURUSU & ANYDESK KONTROLÜ RAPORU';
           embedColor = '#F59E0B';
-          staffList.sort((a, b) => ((b.stats.todayAnydeskChecks || 0) + (b.stats.todayApplyClaims || 0)) - ((a.stats.todayAnydeskChecks || 0) + (a.stats.todayApplyClaims || 0)));
+          staffList.sort((a, b) => (b.daily.anydeskChecks + b.daily.applyClaims) - (a.daily.anydeskChecks + a.daily.applyClaims));
 
           reportText = staffList.slice(0, 20).map((item, idx) => {
-            const applyClaims = item.stats.todayApplyClaims || 0;
-            const anydesk = item.stats.todayAnydeskChecks || 0;
             return `**#${idx + 1}** ${item.member}\n` +
-                   `⚔️ **Üstlenilen Başvuru:** \`${applyClaims} adet\` • 🖥️ **Anydesk Kontrolü (Temiz/Hile):** \`${anydesk} adet\``;
+                   `⚔️ **Üstlenilen Başvuru:** \`${item.daily.applyClaims} adet\` • 🖥️ **Anydesk Kontrolü (Temiz/Hile):** \`${item.daily.anydeskChecks} adet\``;
           }).join('\n\n');
         }
         // FİLTRE 5: HAFTALIK ÖZET (PERM UP/DOWN)
@@ -3584,7 +3739,7 @@ client.on('interactionCreate', async (interaction) => {
           let activeText = activeList.map((item, idx) => {
             const icon = idx === 0 ? '👑' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `\`#${idx + 1}\``;
             return `${icon} ${item.member} • ⭐ **${item.weeklyScore} Haftalık Puan**\n` +
-                   `🎙️ Seste: \`${formatDuration(item.stats.weeklyVoice || 0)}\` • ✋ Destek: \`${item.stats.weeklyTicketClaims || item.stats.totalClaimed || 0}\` • 🖥️ Anydesk: \`${item.stats.weeklyAnydeskChecks || 0}\` • 🎒 Gear: \`${item.stats.weeklyGearGiven || 0}\``;
+                   `🎙️ Seste: \`${formatDuration(item.weekly.voiceTime)}\` • ✋ Destek: \`${item.weekly.ticketClaims}\` • 🖥️ Anydesk: \`${item.weekly.anydeskChecks}\` • 🎒 Gear: \`${item.weekly.gearGiven}\``;
           }).join('\n\n');
 
           reportText = `### 🌟 Bu Haftanın En Çalışkanları (Perm UP Adayları):\n` +
@@ -3604,7 +3759,7 @@ client.on('interactionCreate', async (interaction) => {
               const icon = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `\`#${idx + 1}\``;
               const voiceStatus = item.isInVoice ? '🟢' : '⚪';
               return `${icon} ${item.member} (${voiceStatus}) • ⭐ **${item.dailyScore} Puan**\n` +
-                     `🎙️ Seste: \`${formatDuration(item.liveVoice)}\` • ✋ Destek: \`${item.stats.todayTicketClaims || item.stats.todayClaimed || 0}\` • ⚔️ Başvuru: \`${item.stats.todayApplyClaims || 0}\` • 🖥️ Anydesk: \`${item.stats.todayAnydeskChecks || 0}\` • 🎒 Gear: \`${item.stats.todayGearGiven || 0}\``;
+                     `🎙️ Seste: \`${formatDuration(item.daily.voiceTime)}\` • ✋ Destek: \`${item.daily.ticketClaims}\` • ⚔️ Başvuru: \`${item.daily.applyClaims}\` • 🖥️ Anydesk: \`${item.daily.anydeskChecks}\` • 🎒 Gear: \`${item.daily.gearGiven}\``;
             }).join('\n\n') +
             `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
             `⚠️ **Bugün Hiçbir Şey Yapmayanlar (${inactives.length} Kişi):** ` +
@@ -3615,7 +3770,7 @@ client.on('interactionCreate', async (interaction) => {
           .setColor(embedColor)
           .setAuthor({ name: `${guild.name} • Yetkili Yönetim & Denetim Paneli`, iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
           .setTitle(embedTitle)
-          .setDescription(reportText)
+          .setDescription(truncateDiscordText(reportText || 'Bu filtre için gösterilecek yetkili bulunamadı.'))
           .setFooter({ text: `${FOOTER_TEXT} • Perm UP/DOWN Yönetici Paneli` })
           .setTimestamp();
 
@@ -3637,33 +3792,12 @@ client.on('interactionCreate', async (interaction) => {
           if (member.user.bot) continue;
           if (!isStaffMember(member, data)) continue;
 
-          const stats = data.staffStats[userId] || {};
-          let score = 0;
-          let voiceTime = 0;
-
-          if (timeRange === 'bugun') {
-            let liveVoice = stats.todayVoice || 0;
-            if (member.voice?.channelId && member.voice.channelId !== guild.afkChannelId && stats.voiceJoinedAt) {
-              liveVoice += (Date.now() - stats.voiceJoinedAt);
-            }
-            voiceTime = liveVoice;
-            score = Math.floor(liveVoice / 60000) * 2 +
-                    ((stats.todayTicketClaims || stats.todayClaimed || 0) * 20) +
-                    ((stats.todayApplyClaims || 0) * 20) +
-                    ((stats.todayAnydeskChecks || 0) * 30) +
-                    ((stats.todaySolvedTickets || stats.todayTickets || 0) * 25) +
-                    ((stats.todayTicketMsgs || 0) * 2) +
-                    ((stats.todayGearGiven || 0) * 15);
-          } else {
-            voiceTime = stats.weeklyVoice || 0;
-            score = Math.floor(voiceTime / 60000) * 2 +
-                    ((stats.weeklyTicketClaims || stats.totalClaimed || 0) * 20) +
-                    ((stats.weeklyApplyClaims || 0) * 20) +
-                    ((stats.weeklyAnydeskChecks || 0) * 30) +
-                    ((stats.weeklySolvedTickets || stats.totalTickets || 0) * 25) +
-                    ((stats.weeklyTicketMsgs || stats.totalTicketMsgs || 0) * 2) +
-                    ((stats.weeklyGearGiven || 0) * 15);
-          }
+          const stats = normalizeStaffStats(data.staffStats[userId]);
+          const activeVoiceMs = member.voice?.channelId && member.voice.channelId !== guild.afkChannelId && stats.voiceJoinedAt
+            ? Math.max(0, Date.now() - stats.voiceJoinedAt)
+            : 0;
+          const metrics = getPeriodMetrics(stats, timeRange === 'bugun' ? 'today' : 'weekly', activeVoiceMs);
+          const { score, voiceTime } = metrics;
 
           if (score === 0 && voiceTime === 0) {
             inactives.push(member);
@@ -3674,14 +3808,14 @@ client.on('interactionCreate', async (interaction) => {
           .setColor('#EF4444')
           .setAuthor({ name: `${guild.name} • İnaktif Yetkili Denetimi`, iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
           .setTitle(`⚠️ ${timeRange === 'bugun' ? 'BUGÜN' : 'BU HAFTA'} HİÇBİR ŞEY YAPMAYAN YETKİLİLER`)
-          .setDescription(
+          .setDescription(truncateDiscordText(
             `Aşağıdaki yetkililer ${timeRange === 'bugun' ? 'bugün' : 'bu hafta'} **0 saat seste kalmış, 0 ticket bakmış, 0 gear vermiş ve 0 puan çekmiştir.**\n` +
             `*(Perm DOWN / Yetki Düşürme kararlarınız için doğrudan kanıttır).* \n\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
             (inactives.length > 0
               ? inactives.map((m, idx) => `**${idx + 1}.** ${m} (\`${m.user.tag}\`) • Rol: \`${m.roles.highest.name}\``).join('\n\n')
               : `✅ **Tebrikler!** ${timeRange === 'bugun' ? 'Bugün' : 'Bu hafta'} inaktif hiçbir yetkili bulunmuyor, herkes çalıştı!`)
-          )
+          ))
           .setFooter({ text: `${FOOTER_TEXT} • Toplam İnaktif: ${inactives.length} Yetkili` })
           .setTimestamp();
 
@@ -3694,57 +3828,25 @@ client.on('interactionCreate', async (interaction) => {
         const targetUser = interaction.options.getUser('yetkili');
         const guild = interaction.guild;
         const data = loadData();
-
-        const stats = data.staffStats?.[targetUser.id] || {
-          todayVoice: 0,
-          weeklyVoice: 0,
-          totalVoice: 0,
-          todayTicketMsgs: 0,
-          weeklyTicketMsgs: 0,
-          totalTicketMsgs: 0,
-          todayTicketClaims: 0,
-          weeklyTicketClaims: 0,
-          totalTicketClaims: 0,
-          todayApplyClaims: 0,
-          weeklyApplyClaims: 0,
-          totalApplyClaims: 0,
-          todayAnydeskChecks: 0,
-          weeklyAnydeskChecks: 0,
-          totalAnydeskChecks: 0,
-          todaySolvedTickets: 0,
-          weeklySolvedTickets: 0,
-          totalSolvedTickets: 0,
-          todayGearGiven: 0,
-          weeklyGearGiven: 0,
-          totalGearGiven: 0,
-          voiceJoinedAt: null
-        };
-
         const member = await guild.members.fetch(targetUser.id).catch(() => null);
-        let liveVoice = stats.todayVoice || 0;
+        if (!member || member.user.bot || !isStaffMember(member, data)) {
+          return interaction.editReply('❌ Seçilen kullanıcı mevcut yetkili kadrosunda bulunmuyor. Yetkili rollerini `/basvuru-yetkili` veya `/ticket-yetkili` ile tanımlayabilirsiniz.');
+        }
+
+        const stats = normalizeStaffStats(data.staffStats?.[targetUser.id]);
         let isInVoice = false;
+        let activeVoiceMs = 0;
         if (member?.voice?.channelId && member.voice.channelId !== guild.afkChannelId) {
           isInVoice = true;
           if (stats.voiceJoinedAt) {
-            liveVoice += (Date.now() - stats.voiceJoinedAt);
+            activeVoiceMs = Math.max(0, Date.now() - stats.voiceJoinedAt);
           }
         }
 
-        const dailyScore = Math.floor(liveVoice / 60000) * 2 +
-                           ((stats.todayTicketClaims || stats.todayClaimed || 0) * 20) +
-                           ((stats.todayApplyClaims || 0) * 20) +
-                           ((stats.todayAnydeskChecks || 0) * 30) +
-                           ((stats.todaySolvedTickets || stats.todayTickets || 0) * 25) +
-                           ((stats.todayTicketMsgs || 0) * 2) +
-                           ((stats.todayGearGiven || 0) * 15);
-
-        const weeklyScore = Math.floor(((stats.weeklyVoice || 0) + (liveVoice - (stats.todayVoice || 0))) / 60000) * 2 +
-                            ((stats.weeklyTicketClaims || stats.totalClaimed || 0) * 20) +
-                            ((stats.weeklyApplyClaims || 0) * 20) +
-                            ((stats.weeklyAnydeskChecks || 0) * 30) +
-                            ((stats.weeklySolvedTickets || stats.totalTickets || 0) * 25) +
-                            ((stats.weeklyTicketMsgs || stats.totalTicketMsgs || 0) * 2) +
-                            ((stats.weeklyGearGiven || 0) * 15);
+        const daily = getPeriodMetrics(stats, 'today', activeVoiceMs);
+        const weekly = getPeriodMetrics(stats, 'weekly', activeVoiceMs);
+        const dailyScore = daily.score;
+        const weeklyScore = weekly.score;
 
         let permEvaluation = '🟡 Normal Yetkili (Gereksinimleri karşılıyor)';
         if (dailyScore >= 300 || weeklyScore >= 1500) {
@@ -3767,24 +3869,24 @@ client.on('interactionCreate', async (interaction) => {
             { name: '🎯 Sistem Tavsiyesi', value: `\`${permEvaluation}\``, inline: false },
             {
               name: '📅 BUGÜNKÜ PERFORMANS',
-              value: `• 🎙️ **Seste Kalma:** \`${formatDuration(liveVoice)}\`\n` +
-                     `• ✋ **Üstlenilen Destek:** \`${stats.todayTicketClaims || stats.todayClaimed || 0} adet\`\n` +
-                     `• ⚔️ **Üstlenilen Başvuru:** \`${stats.todayApplyClaims || 0} adet\`\n` +
-                     `• 🖥️ **Anydesk Kontrolü:** \`${stats.todayAnydeskChecks || 0} adet\`\n` +
-                     `• 🎒 **Gear Verme (#ekip):** \`${stats.todayGearGiven || 0} adet\`\n` +
-                     `• 💬 **Ticket Mesajı:** \`${stats.todayTicketMsgs || 0} adet\`\n` +
-                     `• ✅ **Çözülen / Kapatılan:** \`${stats.todaySolvedTickets || stats.todayTickets || 0} adet\``,
+              value: `• 🎙️ **Seste Kalma:** \`${formatDuration(daily.voiceTime)}\`\n` +
+                     `• ✋ **Üstlenilen Destek:** \`${daily.ticketClaims} adet\`\n` +
+                     `• ⚔️ **Üstlenilen Başvuru:** \`${daily.applyClaims} adet\`\n` +
+                     `• 🖥️ **Anydesk Kontrolü:** \`${daily.anydeskChecks} adet\`\n` +
+                     `• 🎒 **Gear Verme (#ekip):** \`${daily.gearGiven} adet\`\n` +
+                     `• 💬 **Ticket Mesajı:** \`${daily.ticketMsgs} adet\`\n` +
+                     `• ✅ **Çözülen / Kapatılan:** \`${daily.solvedTickets} adet\``,
               inline: true
             },
             {
               name: '🗓️ BU HAFTAKİ PERFORMANS',
-              value: `• 🎙️ **Seste Kalma:** \`${formatDuration(stats.weeklyVoice || 0)}\`\n` +
-                     `• ✋ **Üstlenilen Destek:** \`${stats.weeklyTicketClaims || stats.totalClaimed || 0} adet\`\n` +
-                     `• ⚔️ **Üstlenilen Başvuru:** \`${stats.weeklyApplyClaims || 0} adet\`\n` +
-                     `• 🖥️ **Anydesk Kontrolü:** \`${stats.weeklyAnydeskChecks || 0} adet\`\n` +
-                     `• 🎒 **Gear Verme (#ekip):** \`${stats.weeklyGearGiven || 0} adet\`\n` +
-                     `• 💬 **Ticket Mesajı:** \`${stats.weeklyTicketMsgs || stats.totalTicketMsgs || 0} adet\`\n` +
-                     `• ✅ **Çözülen / Kapatılan:** \`${stats.weeklySolvedTickets || stats.totalTickets || 0} adet\``,
+              value: `• 🎙️ **Seste Kalma:** \`${formatDuration(weekly.voiceTime)}\`\n` +
+                     `• ✋ **Üstlenilen Destek:** \`${weekly.ticketClaims} adet\`\n` +
+                     `• ⚔️ **Üstlenilen Başvuru:** \`${weekly.applyClaims} adet\`\n` +
+                     `• 🖥️ **Anydesk Kontrolü:** \`${weekly.anydeskChecks} adet\`\n` +
+                     `• 🎒 **Gear Verme (#ekip):** \`${weekly.gearGiven} adet\`\n` +
+                     `• 💬 **Ticket Mesajı:** \`${weekly.ticketMsgs} adet\`\n` +
+                     `• ✅ **Çözülen / Kapatılan:** \`${weekly.solvedTickets} adet\``,
               inline: true
             }
           )
@@ -5952,6 +6054,62 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       const customId = interaction.customId;
 
+      // Tagı olmayan kadroyu yalnızca taramayı başlatan yönetici isterse DM'den uyarır.
+      if (customId.startsWith('btn_tag_warn_')) {
+        const scanId = customId.replace('btn_tag_warn_', '');
+        const scan = pendingTagScans.get(scanId);
+
+        if (!scan || Date.now() - scan.createdAt > 30 * 60 * 1000) {
+          pendingTagScans.delete(scanId);
+          return interaction.reply({ content: '❌ Bu tag taramasının uyarı süresi dolmuş. Yeniden `/tag-tara` çalıştırın.', ephemeral: true });
+        }
+        if (scan.requesterId !== interaction.user.id) {
+          return interaction.reply({ content: '❌ Bu DM uyarısını yalnızca taramayı başlatan yönetici gönderebilir.', ephemeral: true });
+        }
+        if (scan.guildId !== interaction.guildId) {
+          return interaction.reply({ content: '❌ Tarama kaydı bu sunucuya ait değil.', ephemeral: true });
+        }
+
+        pendingTagScans.delete(scanId);
+        await interaction.deferReply({ ephemeral: true });
+        const data = loadData();
+        let warned = 0;
+        let alreadyFixed = 0;
+        let noLongerRequired = 0;
+        let failed = 0;
+
+        for (const memberId of scan.missingMemberIds) {
+          const member = await interaction.guild.members.fetch(memberId).catch(() => null);
+          if (!member || !isTagScanTarget(member, data)) {
+            noLongerRequired += 1;
+            continue;
+          }
+          if (memberHasConfiguredTag(member, scan.tagText)) {
+            alreadyFixed += 1;
+            continue;
+          }
+
+          try {
+            await member.send(
+              `Merhaba **${member.displayName}**, **${interaction.guild.name}** sunucusunda Klan/Has Klan/Yetkili kadrosunda bulunuyorsun. ` +
+              `İsminde sunucu tagımız **${scan.tagText}** görünmüyor. Lütfen ismine \`${scan.tagText}\` tagını ekler misin?\n\n` +
+              `Bu bildirim sunucu yönetimi tarafından gönderildi.`
+            );
+            warned += 1;
+          } catch {
+            failed += 1;
+          }
+        }
+
+        await interaction.message.edit({ components: [] }).catch(() => {});
+        return interaction.editReply(
+          `📨 DM uyarısı tamamlandı.\n✅ Gönderilen: \`${warned}\`\n` +
+          `🏷️ Bu sırada tagı takmış olan: \`${alreadyFixed}\`\n` +
+          `↩️ Artık tarama kapsamında olmayan: \`${noLongerRequired}\`\n` +
+          `❌ DM'i kapalı/ulaşılamayan: \`${failed}\``
+        );
+      }
+
       // 0.1. YETKİLİ SIRALAMASI DÖNEM GEÇİŞ BUTONLARI (Bugün / Bu Hafta / Toplam)
       if (customId === 'btn_lb_today' || customId === 'btn_lb_weekly' || customId === 'btn_lb_total') {
         const period = customId === 'btn_lb_weekly' ? 'weekly' : customId === 'btn_lb_total' ? 'total' : 'today';
@@ -6225,17 +6383,15 @@ client.on('interactionCreate', async (interaction) => {
 
         // Katılım Şartı Kontrolü
         if (gw.reqOption && gw.reqOption !== 'none' && !gw.participants.has(userId)) {
-          const configuredTag = String(data.tagText || 'VYRN').toLowerCase();
-          const memberName = `${member.displayName || ''} ${member.user?.username || ''}`.toLowerCase();
           const hasTag = Boolean(
             (data.tagRoleId && member.roles.cache.has(data.tagRoleId)) ||
-            (configuredTag && memberName.includes(configuredTag))
+            memberHasConfiguredTag(member, data.tagText || 'ϟVYRN')
           );
           const hasAbone = data.aboneRoleId && member.roles.cache.has(data.aboneRoleId);
 
           if (gw.reqOption === 'tag' && !hasTag) {
             return interaction.reply({
-              content: `❌ Bu çekilişe katılabilmek için **@Vyron • Tag** taşımanız veya isminizde **VYRN** klan tagı olması gerekmektedir!`,
+              content: `❌ Bu çekilişe katılabilmek için tag rolünü taşımanız veya isminizde **${data.tagText || 'ϟVYRN'}** tagı olması gerekmektedir!`,
               ephemeral: true
             });
           }
@@ -6509,6 +6665,10 @@ module.exports = {
   app,
   client,
   commands,
+  isLikelyStaffRoleName,
+  isTagScanTarget,
+  memberHasConfiguredTag,
+  normalizeTagValue,
   start,
   stop
 };
