@@ -35,3 +35,8 @@ test('veri deposu kaydet/yükle turunda kalıcı alanları düşürmez', () => {
   assert.equal(loaded.securityMode, false);
   assert.equal(loaded.polls.poll1.question, 'Test');
 });
+
+test('eski rozet simgeli tag ayarı gerçek Guild Tag metnine dönüştürülür', () => {
+  assert.equal(normalizeData({ tagText: 'ϟVYRN' }).tagText, 'VYRN');
+  assert.equal(normalizeData({ tagText: '⚡VYRN' }).tagText, 'VYRN');
+});

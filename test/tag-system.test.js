@@ -9,28 +9,49 @@ const {
   normalizeTagValue
 } = require('../index');
 
-function createMember(names = {}) {
+function createMember(options = {}) {
   return {
+    guild: { id: options.guildId || 'guild-vyron' },
     user: {
-      username: names.username || null,
-      globalName: names.globalName || null
+      username: options.username || null,
+      globalName: options.globalName || null,
+      primaryGuild: options.primaryGuild || null
     },
-    nickname: names.nickname || null,
-    displayName: names.displayName || null
+    nickname: options.nickname || null,
+    displayName: options.displayName || null
   };
 }
 
-test('tag eşleşmesi kullanıcı adı, global ad ve sunucu takma adında çalışır', () => {
-  assert.equal(memberHasConfiguredTag(createMember({ username: 'VYRN_Player' }), 'vyrn'), true);
-  assert.equal(memberHasConfiguredTag(createMember({ globalName: '✦ Ahmet' }), '✦'), true);
-  assert.equal(memberHasConfiguredTag(createMember({ nickname: 'Kaan | VYRN' }), 'VYRN'), true);
-  assert.equal(memberHasConfiguredTag(createMember({ displayName: 'NormalOyuncu' }), 'VYRN'), false);
+test('Discord Sunucu Tagı doğru sunucu ve etkin kimlikle eşleşir', () => {
+  const member = createMember({
+    primaryGuild: {
+      identityGuildId: 'guild-vyron',
+      identityEnabled: true,
+      tag: 'VYRN'
+    }
+  });
+
+  assert.equal(memberHasConfiguredTag(member, 'VYRN'), true);
+  assert.equal(memberHasConfiguredTag(member, 'vyrn'), true);
+  assert.equal(memberHasConfiguredTag(member, 'ϟVYRN'), true);
 });
 
-test('tag karşılaştırması Unicode ve Türkçe büyük/küçük harfe dayanıklıdır', () => {
+test('isimde VYRN yazması Discord Sunucu Tagı yerine geçmez', () => {
+  assert.equal(memberHasConfiguredTag(createMember({ username: 'VYRN_Player', nickname: 'ϟVYRN Kaan' }), 'VYRN'), false);
+});
+
+test('kapalı, eksik veya başka sunucuya ait Guild Tag kabul edilmez', () => {
+  assert.equal(memberHasConfiguredTag(createMember({
+    primaryGuild: { identityGuildId: 'guild-vyron', identityEnabled: false, tag: 'VYRN' }
+  }), 'VYRN'), false);
+  assert.equal(memberHasConfiguredTag(createMember({
+    primaryGuild: { identityGuildId: 'guild-vyron', identityEnabled: null, tag: 'VYRN' }
+  }), 'VYRN'), false);
+  assert.equal(memberHasConfiguredTag(createMember({
+    primaryGuild: { identityGuildId: 'other-guild', identityEnabled: true, tag: 'VYRN' }
+  }), 'VYRN'), false);
+  assert.equal(memberHasConfiguredTag(createMember(), 'VYRN'), false);
   assert.equal(normalizeTagValue('  İST  '), 'ist');
-  assert.equal(memberHasConfiguredTag(createMember({ nickname: 'İST • Oyuncu' }), 'ist'), true);
-  assert.equal(memberHasConfiguredTag(createMember({ nickname: 'ϟ VYRN Oyuncu' }), 'ϟVYRN'), true);
 });
 
 test('tag tarama kapsamı normal üyeyi dışarıda bırakıp klan kadrosunu alır', () => {

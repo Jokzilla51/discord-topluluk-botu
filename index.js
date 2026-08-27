@@ -763,17 +763,45 @@ function normalizeTagValue(value) {
   return String(value || '').normalize('NFKC').trim().toLocaleLowerCase('tr-TR');
 }
 
-function memberHasConfiguredTag(member, tagText) {
-  const normalizedTag = normalizeTagValue(tagText).replace(/\s+/g, '');
-  if (!normalizedTag) return false;
+function sanitizeConfiguredGuildTag(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/^[ϟ⚡]\s*/u, '')
+    .slice(0, 4);
+}
 
-  const names = [
-    member.user?.username,
-    member.user?.globalName,
-    member.nickname,
-    member.displayName
-  ];
-  return names.some(name => normalizeTagValue(name).replace(/\s+/g, '').includes(normalizedTag));
+function memberHasConfiguredTag(member, tagText) {
+  const configuredTag = normalizeTagValue(sanitizeConfiguredGuildTag(tagText));
+  const primaryGuild = member?.user?.primaryGuild;
+  if (!configuredTag || !primaryGuild || primaryGuild.identityEnabled !== true) return false;
+  if (!member.guild?.id || primaryGuild.identityGuildId !== member.guild.id) return false;
+
+  return normalizeTagValue(primaryGuild.tag) === configuredTag;
+}
+
+async function fetchMemberGuildTagStatus(member, tagText) {
+  try {
+    const rawUser = await client.rest.get(Routes.user(member.id));
+    if (!Object.hasOwn(rawUser, 'primary_guild')) {
+      return { hasTag: false, verified: false, error: new Error('primary_guild alanı Discord yanıtında yok') };
+    }
+
+    const primaryGuild = rawUser.primary_guild;
+    const configuredTag = normalizeTagValue(sanitizeConfiguredGuildTag(tagText));
+    return {
+      hasTag: Boolean(
+        configuredTag &&
+        primaryGuild?.identity_enabled === true &&
+        primaryGuild.identity_guild_id === member.guild.id &&
+        normalizeTagValue(primaryGuild.tag) === configuredTag
+      ),
+      guildTag: primaryGuild?.tag || null,
+      verified: true
+    };
+  } catch (error) {
+    return { hasTag: false, verified: false, error };
+  }
 }
 
 function isTagScanTarget(member, data) {
@@ -2282,9 +2310,9 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption(option =>
       option.setName('tag')
-        .setDescription('İsimlerde aranacak tag (Örn: VYRN veya ✦)')
+        .setDescription('Discord Sunucu Tagı metni (Örn: VYRN)')
         .setRequired(true)
-        .setMaxLength(32)
+        .setMaxLength(4)
     )
     .addRoleOption(option =>
       option.setName('tag_rolu')
@@ -2535,6 +2563,7 @@ async function registerApplicationCommands() {
 // ==========================================
 client.once('ready', async () => {
   console.log(`🤖 Vyron Bot başarıyla aktif: ${client.user.tag}`);
+  console.log('🚀 Çalışan bot sürümü: v2.1.2');
   client.user.setActivity(config.activityText, { type: 3 });
 
   try {
@@ -3480,7 +3509,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // /tag-ayarla
       if (commandName === 'tag-ayarla') {
-        const tagText = interaction.options.getString('tag', true).trim();
+        const tagText = sanitizeConfiguredGuildTag(interaction.options.getString('tag', true));
         const tagRole = interaction.options.getRole('tag_rolu');
         const logChannel = interaction.options.getChannel('log_kanali');
 
@@ -3505,29 +3534,51 @@ client.on('interactionCreate', async (interaction) => {
 
       // /tag-tara
       if (commandName === 'tag-tara') {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.reply({
+          content: '🔍 Klan, Has Klan ve Yetkili kadrosu taranıyor…',
+          ephemeral: true
+        });
+
+        try {
         const guild = interaction.guild;
         const data = loadData();
-        const tagText = String(data.tagText || 'ϟVYRN').trim();
+        const tagText = sanitizeConfiguredGuildTag(data.tagText || 'VYRN');
 
         if (!tagText) {
           return interaction.editReply('❌ Tag ayarı eksik. Önce `/tag-ayarla` komutunu kullanın.');
         }
 
-        const members = await guild.members.fetch().catch(() => guild.members.cache);
+        let members;
+        try {
+          members = await guild.members.fetch();
+        } catch (error) {
+          throw new Error(`Sunucu üyeleri alınamadı. Discord Developer Portal'da Server Members Intent'i açın. Ayrıntı: ${error.message}`);
+        }
         const scanTargets = [...members.values()].filter(member => isTagScanTarget(member, data));
         const taggedMembers = [];
         const missingMembers = [];
+        const unknownMembers = [];
         if (!data.tagUsers || typeof data.tagUsers !== 'object') data.tagUsers = {};
 
-        for (const member of scanTargets) {
-          const hasTag = memberHasConfiguredTag(member, tagText);
-          (hasTag ? taggedMembers : missingMembers).push(member);
-          data.tagUsers[member.id] = {
-            hasTag,
-            displayName: member.displayName,
-            checkedAt: Date.now()
-          };
+        for (let index = 0; index < scanTargets.length; index += 5) {
+          const batch = scanTargets.slice(index, index + 5);
+          const results = await Promise.all(batch.map(async member => ({
+            member,
+            status: await fetchMemberGuildTagStatus(member, tagText)
+          })));
+
+          for (const { member, status } of results) {
+            if (!status.verified) unknownMembers.push(member);
+            else (status.hasTag ? taggedMembers : missingMembers).push(member);
+
+            data.tagUsers[member.id] = {
+              hasTag: status.verified ? status.hasTag : null,
+              verified: status.verified,
+              guildTag: status.verified ? status.guildTag : null,
+              displayName: member.displayName,
+              checkedAt: Date.now()
+            };
+          }
         }
 
         saveData(data);
@@ -3551,7 +3602,10 @@ client.on('interactionCreate', async (interaction) => {
           ...taggedMembers.map(member => `${cleanReportValue(member.displayName)} | ${member.user.tag} | ${member.id}`),
           '',
           `TAGI TAKMAYANLAR (${missingMembers.length})`,
-          ...missingMembers.map(member => `${cleanReportValue(member.displayName)} | ${member.user.tag} | ${member.id}`)
+          ...missingMembers.map(member => `${cleanReportValue(member.displayName)} | ${member.user.tag} | ${member.id}`),
+          '',
+          `DOĞRULANAMAYANLAR (${unknownMembers.length})`,
+          ...unknownMembers.map(member => `${cleanReportValue(member.displayName)} | ${member.user.tag} | ${member.id}`)
         ];
         const reportFile = {
           attachment: Buffer.from(`${reportLines.join('\n')}\n`, 'utf8'),
@@ -3567,11 +3621,13 @@ client.on('interactionCreate', async (interaction) => {
             `👥 Taranan kadro: \`${scanTargets.length}\`\n` +
             `✅ Tagı takan: \`${taggedMembers.length}\`\n` +
             `⚠️ Tagı takmayan: \`${missingMembers.length}\`\n\n` +
-            `*Normal üyeler taramaya dahil edilmedi. Hiçbir rol değiştirilmedi.*`
+            `❔ Discord'dan doğrulanamayan: \`${unknownMembers.length}\`\n\n` +
+            `*Discord'un gerçek Sunucu Tagı alanı kontrol edildi. Normal üyeler taranmadı ve hiçbir rol değiştirilmedi.*`
           )
           .addFields(
             { name: `✅ Tagı Takanlar (${taggedMembers.length})`, value: previewList(taggedMembers), inline: false },
-            { name: `⚠️ Tagı Takmayanlar (${missingMembers.length})`, value: previewList(missingMembers), inline: false }
+            { name: `⚠️ Tagı Takmayanlar (${missingMembers.length})`, value: previewList(missingMembers), inline: false },
+            { name: `❔ Doğrulanamayanlar (${unknownMembers.length})`, value: previewList(unknownMembers), inline: false }
           )
           .setFooter({ text: FOOTER_TEXT })
           .setTimestamp();
@@ -3602,7 +3658,16 @@ client.on('interactionCreate', async (interaction) => {
           });
         }
 
-        return interaction.editReply({ embeds: [scanEmbed], components, files: [reportFile] });
+        return interaction.editReply({ content: null, embeds: [scanEmbed], components, files: [reportFile] });
+        } catch (error) {
+          console.error('Tag tarama komutu hatası:', error);
+          return interaction.editReply({
+            content: `❌ Tag taraması tamamlanamadı: \`${String(error.message || error).slice(0, 500)}\`\nRender logunda \`Tag tarama komutu hatası\` satırını kontrol edin.`,
+            embeds: [],
+            components: [],
+            attachments: []
+          }).catch(() => null);
+        }
       }
 
       // 4. /yetkili-siralama
@@ -6076,6 +6141,7 @@ client.on('interactionCreate', async (interaction) => {
         let warned = 0;
         let alreadyFixed = 0;
         let noLongerRequired = 0;
+        let verificationFailed = 0;
         let failed = 0;
 
         for (const memberId of scan.missingMemberIds) {
@@ -6084,7 +6150,12 @@ client.on('interactionCreate', async (interaction) => {
             noLongerRequired += 1;
             continue;
           }
-          if (memberHasConfiguredTag(member, scan.tagText)) {
+          const tagStatus = await fetchMemberGuildTagStatus(member, scan.tagText);
+          if (!tagStatus.verified) {
+            verificationFailed += 1;
+            continue;
+          }
+          if (tagStatus.hasTag) {
             alreadyFixed += 1;
             continue;
           }
@@ -6092,7 +6163,7 @@ client.on('interactionCreate', async (interaction) => {
           try {
             await member.send(
               `Merhaba **${member.displayName}**, **${interaction.guild.name}** sunucusunda Klan/Has Klan/Yetkili kadrosunda bulunuyorsun. ` +
-              `İsminde sunucu tagımız **${scan.tagText}** görünmüyor. Lütfen ismine \`${scan.tagText}\` tagını ekler misin?\n\n` +
+              `Discord profilinde sunucu tagımız **${scan.tagText}** görünmüyor. Lütfen sunucu profilinden \`${scan.tagText}\` Sunucu Tagını etkinleştirir misin?\n\n` +
               `Bu bildirim sunucu yönetimi tarafından gönderildi.`
             );
             warned += 1;
@@ -6106,6 +6177,7 @@ client.on('interactionCreate', async (interaction) => {
           `📨 DM uyarısı tamamlandı.\n✅ Gönderilen: \`${warned}\`\n` +
           `🏷️ Bu sırada tagı takmış olan: \`${alreadyFixed}\`\n` +
           `↩️ Artık tarama kapsamında olmayan: \`${noLongerRequired}\`\n` +
+          `❔ Discord'dan doğrulanamayan (DM gönderilmedi): \`${verificationFailed}\`\n` +
           `❌ DM'i kapalı/ulaşılamayan: \`${failed}\``
         );
       }
@@ -6385,13 +6457,13 @@ client.on('interactionCreate', async (interaction) => {
         if (gw.reqOption && gw.reqOption !== 'none' && !gw.participants.has(userId)) {
           const hasTag = Boolean(
             (data.tagRoleId && member.roles.cache.has(data.tagRoleId)) ||
-            memberHasConfiguredTag(member, data.tagText || 'ϟVYRN')
+            memberHasConfiguredTag(member, data.tagText || 'VYRN')
           );
           const hasAbone = data.aboneRoleId && member.roles.cache.has(data.aboneRoleId);
 
           if (gw.reqOption === 'tag' && !hasTag) {
             return interaction.reply({
-              content: `❌ Bu çekilişe katılabilmek için tag rolünü taşımanız veya isminizde **${data.tagText || 'ϟVYRN'}** tagı olması gerekmektedir!`,
+              content: `❌ Bu çekilişe katılabilmek için tag rolünü taşımanız veya Discord profilinizde **${data.tagText || 'VYRN'}** Sunucu Tagını etkinleştirmeniz gerekmektedir!`,
               ephemeral: true
             });
           }

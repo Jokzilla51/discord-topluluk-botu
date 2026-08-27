@@ -1,8 +1,10 @@
-# Vyron Discord Topluluk Botu v2.1
+# Vyron Discord Topluluk Botu v2.1.2
 
 Discord.js v14 tabanlı; ticket, klan başvurusu, moderasyon, çekiliş, anket, yetkili istatistiği, seviye, güvenlik ve OCR ile YouTube abonelik kontrolünü tek botta birleştiren topluluk botu.
 
 ## v2.1 ile düzeltilen önemli sorunlar
+
+- `/tag-tara` artık taramaya başlamadan önce etkileşime anında yanıt verir; tarama sırasında hata oluşursa kullanıcıya ve Render loguna açık hata bilgisi yazar.
 
 - XP ve `guvenlik-modu` artık her veri kaydında silinmiyor.
 - JSON verisi geçici dosya + yeniden adlandırma yöntemiyle güvenli kaydediliyor; yeni alanlar şema dönüşümünde korunuyor.
@@ -12,7 +14,8 @@ Discord.js v14 tabanlı; ticket, klan başvurusu, moderasyon, çekiliş, anket, 
 - Ticket sahibi kanal konusuna ve veri deposuna kaydediliyor; kapanan ticket kayıtları temizleniyor.
 - Tag şartı tekrar gerçek rol/tag kontrolü yapıyor; artık koşulsuz `true` değil.
 - `/tag-ayarla` ve `/tag-tara` eklendi. Tarama yalnızca Klan Üyesi, Has Klan Üyesi ve Yetkili kadrosunu kontrol eder; normal üyeleri dışarıda bırakır.
-- `/tag-tara`, `ϟVYRN` tagını takanları ve takmayanları ayrı listeler. Yönetici isterse sonuçtaki butonla tagı olmayanlara DM uyarısı gönderir; butona basılmadan mesaj gönderilmez ve hiçbir rol otomatik değiştirilmez.
+- `/tag-tara`, kullanıcı adını değil Discord'un gerçek **Sunucu Tagı / Primary Guild** alanını denetler. Rozet simgesi tag metnine dahil değildir; aranan gerçek tag `VYRN` değeridir. Başka sunucuya ait aynı tag kabul edilmez.
+- Tagı takanlar, takmayanlar ve Discord'dan doğrulanamayanlar ayrı listelenir. Yönetici isterse sonuçtaki butonla yalnızca doğrulanmış eksiklere DM uyarısı gönderir; butona basılmadan mesaj gönderilmez ve hiçbir rol otomatik değiştirilmez.
 - Ses mesaisi bütün üyeler yerine yalnızca yetkililer için tutuluyor.
 - Yetkili sıralaması, denetimi ve bireysel raporlarında günlük/haftalık/toplam sayaçlar artık birbirinin yerine kullanılmıyor; gerçek `0` değerleri korunuyor.
 - Sunucudan ayrılmış ya da artık yetkili olmayan eski istatistik sahipleri sıralama ve denetime alınmıyor.

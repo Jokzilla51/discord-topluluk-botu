@@ -18,7 +18,7 @@ const DEFAULT_DATA = Object.freeze({
   staffLeaderboardChannelId: null,
   staffLeaderboardMessageId: null,
   lastDailyResetDate: '',
-  tagText: 'ϟVYRN',
+  tagText: 'VYRN',
   tagLogChannelId: null,
   tagRoleId: null,
   tagRequiredRoleIds: [],
@@ -64,8 +64,8 @@ function normalizeData(value) {
   }
 
   normalized.securityMode = normalized.securityMode !== false;
-  if (!String(parsed.tagText || '').trim() || parsed.tagText === 'VYRN') {
-    normalized.tagText = 'ϟVYRN';
+  if (!String(parsed.tagText || '').trim() || ['ϟVYRN', '⚡VYRN'].includes(parsed.tagText)) {
+    normalized.tagText = 'VYRN';
   }
   normalized.applicationCounter = Number.isInteger(normalized.applicationCounter) && normalized.applicationCounter > 0
     ? normalized.applicationCounter
