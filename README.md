@@ -1,75 +1,94 @@
-# 🤖 Hepsi Bir Arada Discord Botu (Ticket + Çekiliş + Doğrulama)
+# Vyron Discord Topluluk Botu v2
 
-Render.com üzerinde 7/24 Web Service olarak çalışmaya hazır, modern **Discord.js v14** tabanlı topluluk yönetim botu.
+Discord.js v14 tabanlı; ticket, klan başvurusu, moderasyon, çekiliş, anket, yetkili istatistiği, seviye, güvenlik ve OCR ile YouTube abonelik kontrolünü tek botta birleştiren topluluk botu.
 
----
+## v2 ile düzeltilen önemli sorunlar
 
-## ✨ Özellikler
+- XP ve `guvenlik-modu` artık her veri kaydında silinmiyor.
+- JSON verisi geçici dosya + yeniden adlandırma yöntemiyle güvenli kaydediliyor; yeni alanlar şema dönüşümünde korunuyor.
+- Aktif çekilişler, katılımcılar, anket oyları, duyuru onayları, AFK kayıtları ve ticket üstlenmeleri yeniden başlatmadan sonra geri yükleniyor.
+- Uzun çekilişlerde Node.js zamanlayıcı taşması önlendi.
+- Ticket kapatma işlemi yalnızca talep sahibi veya yetkili tarafından yapılabiliyor.
+- Ticket sahibi kanal konusuna ve veri deposuna kaydediliyor; kapanan ticket kayıtları temizleniyor.
+- Tag şartı tekrar gerçek rol/tag kontrolü yapıyor; artık koşulsuz `true` değil.
+- Ses mesaisi bütün üyeler yerine yalnızca yetkililer için tutuluyor.
+- Raid, spam, XP bekleme ve AFK anahtarları sunucu bazında ayrıldı.
+- Bot açılır açılmaz izinsiz rol/kanal oluşturma kaldırıldı. Otomatik kurulum yalnızca komutla veya açıkça etkinleştirildiğinde çalışır.
+- Komutlar her sunucuya tek tek basılmak yerine global veya seçili geliştirme sunucusu kapsamıyla kaydediliyor.
+- Hatalı etkileşimlerde kullanıcı artık “uygulama yanıt vermedi” ekranında bırakılmıyor.
+- `/healthz` gerçek Discord bağlantı durumunu döndürüyor.
+- Discord yedeği 2.000 karakterlik mesaj sınırına takılmaması için JSON dosya eki kullanıyor ve varsayılan olarak kapalı geliyor.
 
-- 🎫 **Destek (Ticket) Sistemi:** Butonlu panel kurulumu (`/ticket-kur`), kullanıcıya özel otomatik kanal açma, yetkili rollerine izin verme, tek tıkla talep kapatma.
-- 🎉 **Çekiliş (Giveaway) Sistemi:** Kolay slash komutu (`/cekilis`), süre geri sayımı, katılımcı sayacı olan buton, süre sonunda otomatik rastgele kazanan seçimi ve tebrik mesajı.
-- 🛡️ **Doğrulama (Verification) Sistemi:** Sunucuya giren üyeler için güvenlik butonu (`/dogrulama-kur`), tek tıkla rol tanımlama.
-- 🌐 **Render 7/24 Uyumlu:** Yerleşik Express HTTP web sunucusu sayesinde Render Web Service üzerinde kapanmadan kesintisiz çalışır.
+## Gereksinimler
 
----
+- Node.js 22.13 veya daha yeni (Node.js 24 önerilir)
+- Discord bot tokenı
+- Developer Portal'da `Server Members Intent` ve `Message Content Intent`
+- Bot için `bot` ve `applications.commands` OAuth kapsamları
 
-## 🛠️ 1. Discord Developer Portal Ayarları
+OCR, ticket ve moderasyon özelliklerinin tamamı için botun kanal/rol yönetimi, mesaj okuma-gönderme, mesaj yönetme, üye susturma/atma/yasaklama izinlerine ihtiyacı vardır. Bot rolü, yönetmesi gereken rollerin üzerinde bulunmalıdır.
 
-1. [Discord Developer Portal](https://discord.com/developers/applications) adresine gidin.
-2. **New Application** butonuna basarak bir isim verin (Örn: `Topluluk Botu`).
-3. Sol menüden **Bot** sekmesine geçin:
-   - **Reset Token** butonuna basarak Token'ınızı kopyalayın (bunu kimseyle paylaşmayın!).
-   - Sayfayı biraz aşağı kaydırıp **Privileged Gateway Intents** altındaki şu 3 ayarı açın (Açık/Mavi yapın):
-     - ✅ **Presence Intent**
-     - ✅ **Server Members Intent**
-     - ✅ **Message Content Intent**
-   - **Save Changes** diyerek kaydedin.
-4. Sol menüden **OAuth2** > **URL Generator** sekmesine gelin:
-   - Scopes: `bot`, `applications.commands` seçin.
-   - Bot Permissions: `Administrator` (veya Manage Channels, Manage Roles, Send Messages, Embed Links vb.) seçin.
-   - En altta çıkan linki kopyalayıp tarayıcınızda açarak botu Discord sunucunuza davet edin.
-
----
-
-## 🚀 2. Render.com Üzerine Kurulum (7/24 Yayına Alma)
-
-1. Projeyi bir GitHub reponuza yükleyin (veya GitHub hesabınıza bağlayın).
-2. [dashboard.render.com](https://dashboard.render.com) adresine girin.
-3. **New +** > **Web Service** seçeneğine tıklayın.
-4. GitHub reponuzu seçin:
-   - **Name:** `topluluk-botu` (veya istediğiniz bir isim)
-   - **Runtime:** `Node`
-   - **Build Command:** `npm install`
-   - **Start Command:** `node index.js`
-   - **Instance Type:** `Free`
-5. Aşağıdaki **Environment Variables** bölümüne:
-   - `TOKEN` = *(Discord'dan kopyaladığınız Bot Token'ı)*
-6. **Deploy Web Service** butonuna tıklayın!
-
-> 💡 **7/24 Uyanık Tutma İpucu:** Render ücretsiz planı 15 dakika istek almayınca uyku moduna geçer. Render'ın size verdiği URL'yi (Örn: `https://topluluk-botu.onrender.com`) [UptimeRobot.com](https://uptimerobot.com) gibi ücretsiz bir izleme sitesine HTTP Monitor (her 5 dakikada bir ping) olarak eklerseniz botunuz hiç kapanmadan 7/24 çalışır!
-
----
-
-## 📖 3. Komutlar & Kullanım
-
-| Komut | Açıklama | Örnek Kullanım |
-|---|---|---|
-| `/yardim` | Botun tüm sistemlerini ve yardım rehberini gösterir. | `/yardim` |
-| `/ticket-kur` | Belirtilen kanala butonlu destek paneli kurar. | `/ticket-kur kanal:#destek yetkili_rol:@DestekEkibi` |
-| `/cekilis` | Süreli ve ödüllü çekiliş başlatır. | `/cekilis sure:10m odul:Discord Nitro kazanan_sayisi:1` |
-| `/dogrulama-kur` | Yeni üyeler için butonlu doğrulama paneli kurar. | `/dogrulama-kur kanal:#dogrulama verilecek_rol:@Uye` |
-
----
-
-## 💻 4. Yerelde (Kendi Bilgisayarınızda) Çalıştırma
+## Kurulum
 
 ```bash
-# Bağımlılıkları yükleyin
-npm install
-
-# .env dosyasını oluşturun ve TOKEN'ınızı yazın
-# TOKEN=bot_tokeniniz
-
-# Botu başlatın
+npm ci
+copy .env.example .env
 npm start
 ```
+
+Linux/macOS üzerinde ikinci komut `cp .env.example .env` şeklindedir. `.env` içindeki `TOKEN` değerini doldurun; bu dosyayı Git'e eklemeyin.
+
+Geliştirme sırasında komutları tek sunucuya anında yüklemek için:
+
+```env
+COMMAND_SCOPE=guild
+GUILD_ID=SUNUCU_ID
+```
+
+Üretimde önerilen ayar:
+
+```env
+COMMAND_SCOPE=global
+AUTO_SETUP_ON_READY=false
+DISCORD_BACKUP_ENABLED=false
+```
+
+Global komut değişikliklerinin Discord'da görünmesi biraz zaman alabilir. İlk kurulumu bilinçli şekilde yapmak için `/otomatik-kurulum` komutunu kullanın.
+
+## Kontroller
+
+```bash
+npm run check
+```
+
+Bu komut sözdizimi kontrolünü, ESLint'i ve Node testlerini çalıştırır. Testler gerçek Discord tokenı gerektirmez.
+
+## Komut grupları
+
+- Destek: `/ticket-kur`, `/ticket-kategori`, `/ticket-yetkili`
+- Klan başvurusu: `/basvuru-kur`, `/basvuru-kategori`, `/basvuru-yetkili`, `/klan-rutbe`, `/hile-rapor`
+- Etkinlik: `/cekilis`, `/reroll`, `/anket`, `/turnuva-duyuru`, `/duyuru`
+- Moderasyon: `/mute`, `/unmute`, `/kick`, `/ban`, `/sil`, `/kilit`, `/yavas-mod`, `/sicil`
+- Yetkili yönetimi: `/yetkili-siralama`, `/yetkili-siralama-kur`, `/yetkili-denetim`, `/yetkili-inaktif`, `/yetkili-rapor`, `/yetkili-terfi`, `/gunluk-rapor`
+- Topluluk: `/seviye`, `/top-seviye`, `/afk`, `/dogrulama-kur`, `/bildirim-rol-kur`, `/haftanin-oyuncusu`
+- Sistem: `/yardim`, `/sunucu-analiz`, `/sunucu-bilgi`, `/sunucu-istatistik`, `/kullanici-bilgi`, `/guvenlik-modu`, `/otomatik-kurulum`
+- Abone/OCR: `/abone-kur`, `/abone-kanal`
+
+Bot toplam 44 slash komutu kaydeder. Komutların seçenekleri ve gerekli yetkileri Discord komut arayüzünde gösterilir.
+
+## Kalıcı veri ve yedekleme
+
+Çalışma verileri `bot_data.json` dosyasındadır ve Git tarafından yok sayılır. Kalıcı disk sunmayan bir platform kullanıyorsanız `DISCORD_BACKUP_ENABLED=true` ile botun yalnızca kendisinin görebildiği yedek kanalını etkinleştirebilirsiniz. Bu seçenek botun kanal oluşturmasına izin verir; varsayılan olarak kapalıdır.
+
+Render dağıtımı için depodaki `render.yaml` kullanılabilir. `TOKEN` gizli ortam değişkeni olarak eklenmelidir. Sağlık kontrolü yolu `/healthz`'dir.
+
+## Güvenlik notları
+
+- Bot tokenını hiçbir zaman kodun içine yazmayın veya GitHub'a göndermeyin.
+- Yönetici izni en kolay kurulumdur fakat zorunlu değildir; mümkünse yalnızca gereken izinleri verin.
+- Otomatik kurulum mevcut isimleri eşleştirir. Üretim sunucusunda çalıştırmadan önce rol ve kanal yedeği almak iyi fikirdir.
+- OCR görüntü işleme CPU tüketir. Yoğun sunucularda abone kanalı dışında kullanılmamalıdır.
+
+## Lisans
+
+Bu depoda ayrı bir lisans dosyası yoktur. Açık kaynak olarak yeniden dağıtmayı planlıyorsanız uygun bir `LICENSE` dosyası ekleyin.

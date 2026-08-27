@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: vyron-discord-bot
+    runtime: node
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: TOKEN
+        sync: false
+      - key: COMMAND_SCOPE
+        value: global
+      - key: AUTO_SETUP_ON_READY
+        value: "false"
+      - key: DISCORD_BACKUP_ENABLED
+        value: "false"
