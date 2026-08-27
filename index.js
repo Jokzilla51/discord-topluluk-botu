@@ -650,167 +650,7 @@ async function getOrCreateCheatLogChannel(guild) {
   }
 }
 
-// 6.1. Sadece Yöneticilerin ve Üyelerin Görebileceği #tag-log Kanalı
-async function getOrCreateTagLogChannel(guild) {
-  try {
-    const data = loadData();
-    if (data.tagLogChannelId) {
-      const savedCh = guild.channels.cache.get(data.tagLogChannelId);
-      if (savedCh) return savedCh;
-    }
 
-    const channels = guild.channels.cache;
-    let ch = channels.find(c => c && c.type === ChannelType.GuildText && (c.name.includes('tag-log') || c.name.includes('tag-takip') || c.name.includes('tag-kontrol')));
-    if (!ch) {
-      ch = await guild.channels.create({
-        name: '🏷️・tag-log',
-        type: ChannelType.GuildText,
-        permissionOverwrites: [
-          { id: guild.roles.everyone.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory], deny: [PermissionFlagsBits.SendMessages] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageChannels] }
-        ]
-      });
-      data.tagLogChannelId = ch.id;
-      saveData(data);
-    }
-    return ch;
-  } catch (err) {
-    console.error('Tag log kanalı oluşturma hatası:', err);
-    return null;
-  }
-}
-
-// 6.2. Discord Clan Tag Rozetlerini (⚡ VYRN) Raw REST API ile Toplama & Önbellekleme
-const rawClanTagsCache = new Map();
-
-async function refreshGuildClanTags(guild) {
-  try {
-    if (!guild || !guild.id) return;
-    let rawMembers = null;
-    try {
-      rawMembers = await client.rest.get(Routes.guildMembers(guild.id) + '?limit=1000');
-    } catch (e1) {
-      try {
-        rawMembers = await client.rest.get(Routes.guildMembers(guild.id), { query: { limit: 1000 } });
-      } catch (e2) {}
-    }
-
-    if (Array.isArray(rawMembers)) {
-      for (const m of rawMembers) {
-        if (!m || !m.user) continue;
-        const uId = m.user.id;
-        const clanObj = m.user.primary_guild || m.user.clan || m.clan;
-        
-        let clanTag = null;
-        if (typeof clanObj === 'string') {
-          clanTag = clanObj;
-        } else if (clanObj && typeof clanObj === 'object') {
-          if (clanObj.identity_guild_id && clanObj.identity_guild_id === guild.id) {
-            clanTag = 'VYRN';
-          } else {
-            clanTag = clanObj.tag || clanObj.badge || null;
-          }
-        }
-        
-        if (clanTag) {
-          rawClanTagsCache.set(uId, String(clanTag));
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Raw clan tag çekme hatası:', err.message);
-  }
-}
-
-// 6.3. Üyenin Klan Tagını (VYRN / Vyron) Taşıyıp Taşımadığını Gelişmiş Şekilde Kontrol Etme (Raw Clan / Primary Guild Rozeti + İsim + Durum)
-function memberHasTag(member, tagText = 'VYRN') {
-  if (!member) return false;
-  const userId = member.id;
-
-  // 1. Raw Discord API'den Gelen Gerçek Klan Rozeti (primary_guild / ⚡ VYRN) Kontrolü
-  const cachedBadge = rawClanTagsCache.get(userId);
-  if (cachedBadge && typeof cachedBadge === 'string') {
-    const cleanBadge = cachedBadge.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (cleanBadge === 'vyrn' || cleanBadge === 'vyron' || cleanBadge.includes('vyrn') || cleanBadge.includes('vyron') || (member.guild && cachedBadge === member.guild.id)) {
-      return true;
-    }
-  }
-
-  // 2. Discord.js Objesindeki Olası Klan Rozetleri
-  const u = member.user || member;
-  const clanObj = u.primary_guild || u.clan || u._patch?.primary_guild || u._patch?.clan || member._patch?.user?.primary_guild || member._patch?.user?.clan || member.guild?.clan;
-  if (clanObj) {
-    let badgeTag = '';
-    if (typeof clanObj === 'string') badgeTag = clanObj;
-    else if (typeof clanObj.tag === 'string') badgeTag = clanObj.tag;
-    else if (clanObj.identity_guild_id && member.guild && clanObj.identity_guild_id === member.guild.id) badgeTag = 'VYRN';
-
-    if (badgeTag) {
-      const cleanBadge = badgeTag.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (cleanBadge === 'vyrn' || cleanBadge === 'vyron' || cleanBadge.includes('vyrn') || cleanBadge.includes('vyron')) {
-        return true;
-      }
-    }
-  }
-
-  // 3. Şekilli Font, Emoji, Boşluk ve Sembol Temizleyici (Unicode Normalization)
-  const normalize = (text) => {
-    if (!text || typeof text !== 'string') return '';
-    return text
-      .normalize('NFKD') // 𝙑𝙔𝙍𝙉, 𝑉𝑌𝑅𝑁, ᴠʏʀɴ, 𝕍𝕐ℝℕ, 𝚅𝚈𝚁𝙽
-      .toLowerCase()
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9]/g, '');
-  };
-
-  const rawTexts = [
-    member.nickname || '',
-    member.displayName || '',
-    u.username || '',
-    u.globalName || '',
-    u.tag || ''
-  ];
-
-  // 4. İsim ve Kullanıcı Adında Doğrudan veya Şekilli VYRN / Vyron Kontrolü
-  for (const raw of rawTexts) {
-    if (!raw) continue;
-    const lowerRaw = raw.toLowerCase();
-    const cleanNorm = normalize(raw);
-
-    if (
-      lowerRaw.includes('vyrn') ||
-      lowerRaw.includes('vyron') ||
-      lowerRaw.includes('v y r n') ||
-      lowerRaw.includes('v.y.r.n') ||
-      lowerRaw.includes('v_y_r_n') ||
-      lowerRaw.includes('v-y-r-n') ||
-      cleanNorm.includes('vyrn') ||
-      cleanNorm.includes('vyron')
-    ) {
-      return true;
-    }
-  }
-
-  // 5. Özel Durum (Custom Status / Biyografi / Aktivite) Kontrolü
-  const activities = member.presence?.activities || [];
-  for (const act of activities) {
-    const stateText = act.state || act.name || act.details || '';
-    if (stateText) {
-      const lowerState = stateText.toLowerCase();
-      const normState = normalize(stateText);
-      if (
-        lowerState.includes('vyrn') ||
-        lowerState.includes('vyron') ||
-        normState.includes('vyrn') ||
-        normState.includes('vyron')
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
 
 // 6.3. Sunucudaki Tüm Yetkili Rollerini (JSON + Otomatik İsim Eşleşmesi) Kalıcı Olarak Toplama
 function getAllStaffRoleIdsForGuild(guild, data) {
@@ -1218,8 +1058,7 @@ async function autoSetupGuildInfrastructure(guild) {
     }
 
     // 3.5. TAG LOG KANALI (#🏷️・tag-log)
-    const chTagLog = await getOrCreateTagLogChannel(guild);
-    if (chTagLog) data.tagLogChannelId = chTagLog.id;
+    // Tag sistemi kaldırıldı - tag log kanalı artık oluşturulmuyor
 
     // 3.6. CANLI YETKİLİ SIRALAMASI KANALI (#👑・yetkili-siralama)
     let chLeaderboard = await getOrCreateStaffLeaderboardChannel(guild);
@@ -2342,66 +2181,6 @@ const commands = [
         .setMaxValue(100)
     ),
 
-  // 29. /tag-kanal
-  new SlashCommandBuilder()
-    .setName('tag-kanal')
-    .setDescription('Klan tagı (VYRN) alan veya bırakanların loglanacağı kanalı ayarlar.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addChannelOption(option =>
-      option.setName('kanal')
-        .setDescription('Tag loglarının düşeceği kanal (Örn: #tag-log)')
-        .setRequired(true)
-        .addChannelTypes(ChannelType.GuildText)
-    ),
-
-  // 30. /tag-rol
-  new SlashCommandBuilder()
-    .setName('tag-rol')
-    .setDescription('Klan tagı (VYRN) alan üyelere otomatik verilecek rolü ayarlar.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addRoleOption(option =>
-      option.setName('rol')
-        .setDescription('Tag alanlara verilecek rol (Örn: @Vyron • Taglı / Ekip)')
-        .setRequired(true)
-    ),
-
-  // 31. /tag-zorunlu-rol
-  new SlashCommandBuilder()
-    .setName('tag-zorunlu-rol')
-    .setDescription('Tag (VYRN) taşıması zorunlu olan rolleri (Klan Üyesi, Has Klan vb.) ekler veya çıkarır.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption(option =>
-      option.setName('islem')
-        .setDescription('Yapılacak işlem')
-        .setRequired(true)
-        .addChoices(
-          { name: '➕ Zorunlu Rol Ekle', value: 'ekle' },
-          { name: '➖ Zorunlu Rol Çıkar', value: 'cikar' },
-          { name: '📋 Zorunlu Rolleri Listele', value: 'liste' }
-        )
-    )
-    .addRoleOption(option =>
-      option.setName('rol')
-        .setDescription('Tag zorunluluğu uygulanacak rol (Örn: @Vyron • Klan Üyesi)')
-        .setRequired(false)
-    ),
-
-  // 32. /tag-tara
-  new SlashCommandBuilder()
-    .setName('tag-tara')
-    .setDescription('Seçilen rolü veya tüm klan/yetkili kadrosunu tarar, tagı eksik olanları raporlar.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addRoleOption(option =>
-      option.setName('rol')
-        .setDescription('Özel olarak taranacak rol (Boş bırakılırsa tüm zorunlu roller taranır)')
-        .setRequired(false)
-    )
-    .addBooleanOption(option =>
-      option.setName('dm_uyar')
-        .setDescription('Tagı olmayan klan üyelerine otomatik DM uyarısı gönderilsin mi?')
-        .setRequired(false)
-    ),
-
   // 33. /gear-kanal
   new SlashCommandBuilder()
     .setName('gear-kanal')
@@ -2497,7 +2276,6 @@ const commands = [
         .setRequired(true)
     ),
 
-
   // 46. /yavas-mod
   new SlashCommandBuilder()
     .setName('yavas-mod')
@@ -2516,8 +2294,6 @@ const commands = [
         .setRequired(false)
         .addChannelTypes(ChannelType.GuildText)
     ),
-
-
 
   // 49. /guvenlik-modu
   new SlashCommandBuilder()
@@ -2613,57 +2389,6 @@ client.on('guildCreate', async (guild) => {
   }
 });
 
-// 4.1. Discord Gateway Raw Olaylarından Gerçek Clan Rozetlerini (⚡ VYRN) Yakalama & Anlık Tag Kontrolü
-client.on('raw', async (packet) => {
-  try {
-    if (!packet || !packet.d) return;
-    const d = packet.d;
-
-    if (packet.t === 'GUILD_MEMBER_UPDATE' || packet.t === 'GUILD_MEMBER_ADD') {
-      const uId = d.user?.id;
-      if (uId) {
-        const clanTag = d.user?.clan?.tag || d.clan?.tag || d.user?.clan_tag;
-        if (clanTag) {
-          rawClanTagsCache.set(uId, clanTag);
-        } else {
-          rawClanTagsCache.delete(uId);
-        }
-        const guild = client.guilds.cache.get(d.guild_id);
-        if (guild) {
-          const member = await guild.members.fetch(uId).catch(() => null);
-          if (member) {
-            await handleTagCheck(null, member);
-          }
-        }
-      }
-    } else if (packet.t === 'USER_UPDATE' || packet.t === 'PRESENCE_UPDATE') {
-      const uId = d.user?.id || d.id;
-      if (uId) {
-        const clanTag = d.user?.clan?.tag || d.clan?.tag || d.user?.clan_tag;
-        if (clanTag) {
-          rawClanTagsCache.set(uId, clanTag);
-        } else {
-          rawClanTagsCache.delete(uId);
-        }
-        for (const [_, guild] of client.guilds.cache) {
-          const member = await guild.members.fetch(uId).catch(() => null);
-          if (member) {
-            await handleTagCheck(null, member);
-          }
-        }
-      }
-    } else if (packet.t === 'GUILD_MEMBERS_CHUNK' && Array.isArray(d.members)) {
-      for (const m of d.members) {
-        const uId = m.user?.id;
-        const clanTag = m.user?.clan?.tag || m.clan?.tag || m.user?.clan_tag;
-        if (uId && clanTag) {
-          rawClanTagsCache.set(uId, clanTag);
-        }
-      }
-    }
-  } catch (e) {}
-});
-
 // ==========================================
 // 4.1. YETKİLİ SES DURUMU VE MESAİ TAKİPÇİSİ (VOICE STATE UPDATE)
 // (Yetkililerin seste durduğu süreyi komutsuz olarak 7/24 otomatik hesaplar)
@@ -2709,7 +2434,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       }
     }
 
-    if (!isStaffTrackingLive()) return; // Yarın sabah 09:00'a kadar ses takibi kapalı
+    if (!isStaffTrackingLive()) return;
 
     const data = loadData();
     if (!data.staffStats) data.staffStats = {};
@@ -2750,7 +2475,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     // 3. Kanal Değiştirdi
     else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
       if (newState.channelId === newState.guild.afkChannelId) {
-        // AFK odasına geçtiyse süreyi durdur
         if (userStats.voiceJoinedAt) {
           const duration = Date.now() - userStats.voiceJoinedAt;
           userStats.todayVoice = (userStats.todayVoice || 0) + duration;
@@ -2760,7 +2484,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
           saveData(data);
         }
       } else {
-        // Normal odaya geçtiyse
         if (userStats.voiceJoinedAt) {
           const duration = Date.now() - userStats.voiceJoinedAt;
           userStats.todayVoice = (userStats.todayVoice || 0) + duration;
@@ -2774,145 +2497,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   } catch (err) {
     console.error('Ses takip hatası:', err);
   }
-});
-
-// ==========================================
-// 4.2. KLAN TAGI TAKİP VE LOG SİSTEMİ (VYRN / Vyron Tagı)
-// ==========================================
-async function handleTagCheck(oldMember, newMember) {
-  try {
-    if (!newMember || newMember.user.bot) return;
-    const guild = newMember.guild;
-    const data = loadData();
-    if (!data.tagUsers) data.tagUsers = {};
-
-    const tagText = data.tagText || 'VYRN';
-    const hadTag = oldMember ? memberHasTag(oldMember, tagText) : false;
-    const hasTagNow = memberHasTag(newMember, tagText);
-    const userId = newMember.id;
-    const userRecord = data.tagUsers[userId] || { hasTag: hadTag, warned: false };
-
-    const chTagLog = await getOrCreateTagLogChannel(guild);
-
-    // DURUM 1: Tag Alındı (Yeni ismine VYRN ekledi)
-    if (hasTagNow && (!userRecord.hasTag || !hadTag)) {
-      data.tagUsers[userId] = {
-        hasTag: true,
-        warned: false, // Tagı tekrar aldığı için uyarı durumunu sıfırla
-        lastTagChange: Date.now()
-      };
-      saveData(data);
-
-      // Tag Rolü (Kayıtlı veya otomatik Vyron Tag / Taglı rolü)
-      const tagRole = (data.tagRoleId && guild.roles.cache.get(data.tagRoleId)) ||
-                      guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron tag') ||
-                      guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron • tag') ||
-                      guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron') && r.name.toLowerCase().includes('tag')) ||
-                      guild.roles.cache.find(r => r.name.toLowerCase().includes('taglı') || r.name.toLowerCase().includes('tagli'));
-
-      if (tagRole && isClanOrStaffMember(newMember, data)) {
-        if (!newMember.roles.cache.has(tagRole.id)) {
-          await newMember.roles.add(tagRole).catch(() => {});
-        }
-      }
-
-      if (chTagLog) {
-        const joinEmbed = new EmbedBuilder()
-          .setColor('#10B981')
-          .setAuthor({ name: 'Vyron Tag Takip & Kontrol Sistemi', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle('🟢 BİR ÜYE KLAN TAGIMIZI ALDI!')
-          .setThumbnail(newMember.user.displayAvatarURL({ dynamic: true, size: 256 }))
-          .addFields(
-            { name: '👤 Kullanıcı', value: `${newMember} (\`${newMember.user.tag}\`)`, inline: true },
-            { name: '🆔 Discord ID', value: `\`${newMember.id}\``, inline: true },
-            { name: '🏷️ Güncel İsim', value: `\`${newMember.displayName}\``, inline: true },
-            { name: '⏰ İşlem Tarihi', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
-          )
-          .setFooter({ text: `${FOOTER_TEXT} • Tagımızı Aldığınız İçin Teşekkürler!` })
-          .setTimestamp();
-
-        await chTagLog.send({ embeds: [joinEmbed] }).catch(() => {});
-      }
-    }
-    // DURUM 2: Tag Bırakıldı veya Başka Bir Taga Geçildi
-    else if (!hasTagNow && (userRecord.hasTag || hadTag)) {
-      data.tagUsers[userId] = {
-        hasTag: false,
-        warned: userRecord.warned || false,
-        lastTagChange: Date.now()
-      };
-
-      // Tag rolü varsa geri al
-      const tagRole = (data.tagRoleId && guild.roles.cache.get(data.tagRoleId)) ||
-                      guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron tag') ||
-                      guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron • tag') ||
-                      guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron') && r.name.toLowerCase().includes('tag')) ||
-                      guild.roles.cache.find(r => r.name.toLowerCase().includes('taglı') || r.name.toLowerCase().includes('tagli'));
-
-      if (tagRole && newMember.roles.cache.has(tagRole.id)) {
-        await newMember.roles.remove(tagRole).catch(() => {});
-      }
-
-      // SADECE KLAN ÜYESİ, HAS KLAN ÜYESİ VEYA YETKİLİ İSE LOGLA VE UYARI AT (Normal üyeler tag taşımak zorunda değildir)
-      const isTargetClanStaff = isClanOrStaffMember(newMember, data);
-
-      if (isTargetClanStaff) {
-        if (chTagLog) {
-          const leaveEmbed = new EmbedBuilder()
-            .setColor('#EF4444')
-            .setAuthor({ name: 'Vyron Tag Güvenlik & Disiplin Sistemi', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-            .setTitle('🔴 KLAN ÜYESİ / YETKİLİ TAGI BIRAKTI!')
-            .setThumbnail(newMember.user.displayAvatarURL({ dynamic: true, size: 256 }))
-            .addFields(
-              { name: '👤 Kullanıcı', value: `${newMember} (\`${newMember.user.tag}\`)`, inline: true },
-              { name: '🆔 Discord ID', value: `\`${newMember.id}\``, inline: true },
-              { name: '🏷️ Güncel İsim', value: `\`${newMember.displayName}\``, inline: true },
-              { name: '⏰ İşlem Tarihi', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
-              { name: '⚠️ Tespit', value: `Klan tagı isminden silindi veya başka bir klan tagına geçildi.`, inline: false }
-            )
-            .setFooter({ text: `${FOOTER_TEXT} • Güvenlik & Disiplin` })
-            .setTimestamp();
-
-          await chTagLog.send({ embeds: [leaveEmbed] }).catch(() => {});
-        }
-
-        // 1 SEFERLİK DM UYARISI
-        if (!data.tagUsers[userId].warned) {
-          data.tagUsers[userId].warned = true;
-          saveData(data);
-
-          try {
-            await newMember.send({
-              content: `⚠️ **UYARI:** **${guild.name}** klanımızın resmi tagı olan **VYRN** tagını isminizden çıkardığınız veya başka bir taga geçtiğiniz tespit edildi!\n\n` +
-                `📌 Lütfen klan tagımızı en kısa sürede tekrar isminize ekleyiniz. **Aksi takdirde klandan atılacaksınız.** ⚔️`
-            });
-          } catch (e) {}
-        } else {
-          saveData(data);
-        }
-      } else {
-        saveData(data);
-      }
-    }
-  } catch (err) {
-    console.error('Tag takip hatası:', err);
-  }
-}
-
-client.on('guildMemberUpdate', async (oldMember, newMember) => {
-  await handleTagCheck(oldMember, newMember);
-});
-
-client.on('userUpdate', async (oldUser, newUser) => {
-  try {
-    for (const [_, guild] of client.guilds.cache) {
-      const member = await guild.members.fetch(newUser.id).catch(() => null);
-      if (member) {
-        const oldMember = { ...member, user: oldUser, displayName: oldUser.globalName || oldUser.username };
-        await handleTagCheck(oldMember, member);
-      }
-    }
-  } catch (e) {}
 });
 
 // ==========================================
@@ -3429,7 +3013,6 @@ function buildHelpMenu(category = 'home') {
       { label: 'Yetkili Mesai & Sıralama', value: 'staff', emoji: '👑', description: 'Canlı ses, ticket, gear takibi ve perm up/down' },
       { label: 'Klan & Anydesk Başvuru', value: 'clan', emoji: '🛡️', description: 'Ticketli Anydesk onaylı klan alım paneli' },
       { label: 'Kategorili Destek / Ticket', value: 'ticket', emoji: '🎫', description: 'Gelişmiş talep ve ticket yönetimi' },
-      { label: 'Klan Tagı (VYRN) Takip & Log', value: 'tag', emoji: '🏷️', description: 'Klan rozeti, tag tarama ve DM uyarı sistemi' },
       { label: 'Turnuva, Event & IGN Kayıt', value: 'event', emoji: '🏆', description: 'Otomatik katılımcı listeli turnuva duyurusu' },
       { label: 'Güvenlik & Moderasyon', value: 'mod', emoji: '🔨', description: 'Kilit, mute, kick, ban, sil ve doğrulama' },
       { label: 'Yapay Zeka Abone & Çekiliş', value: 'community', emoji: '🎉', description: 'Yapay zeka ile YouTube SS okuma ve çekilişler' }
@@ -3472,15 +3055,6 @@ function buildHelpMenu(category = 'home') {
         { name: '`/ticket-yetkili [işlem] [rol]`', value: 'Ticketları görebilecek yetkili rollerini sınırsız ekler/çıkarır.' },
         { name: '`/ticket-kategori [kategori]`', value: 'Ticket odalarının açılacağı kategoriyi ayarlar.' }
       );
-  } else if (category === 'tag') {
-    embed.setTitle('🏷️ Klan Tagı (VYRN) Takip & Denetim Sistemi')
-      .setDescription('Discord Klan Rozetleri (`⚡ VYRN`) ve isim taglarını 7/24 anlık takip eder:')
-      .addFields(
-        { name: '`/tag-tara [rol] [dm_uyar]`', value: 'Klan kadrosunu tarar, tagı olmayanları raporlar ve tek tıkla DM uyarısı atar.' },
-        { name: '`/tag-zorunlu-rol [işlem] [rol]`', value: 'Tag taşıması zorunlu olan rolleri ekler / çıkarır / listeler.' },
-        { name: '`/tag-kanal [kanal]`', value: 'Tag loglarının anlık düşeceği kanalı (`#tag-log`) ayarlar.' },
-        { name: '`/tag-rol [rol]`', value: 'Tag alanlara otomatik verilecek rolü ayarlar.' }
-      );
   } else if (category === 'event') {
     embed.setTitle('🏆 Turnuva, Event & Topluluk Etkinlikleri')
       .setDescription('Turnuva ve IGN toplama modülü:')
@@ -3511,7 +3085,7 @@ function buildHelpMenu(category = 'home') {
         { name: '`/seviye [kullanici]`', value: 'Kullanıcının seviyesini, toplam XP ve ilerleme kartını gösterir.' },
         { name: '`/top-seviye`', value: 'Sunucunun en yüksek seviyeli üyelerini listeler.' },
         { name: '`/afk [sebep]`', value: 'AFK moduna geçer; etiketlendiğinizde bot sebebi otomatik bildirir.' },
-        { name: '`/cekilis [kanal] [odul] [sure] [kazanan_sayisi] [sart]`', value: 'Tag/Abone şartlı canlı çekiliş başlatır.' },
+        { name: '`/cekilis [kanal] [odul] [sure] [kazanan_sayisi] [sart]`', value: 'Abone şartlı veya şartsız canlı çekiliş başlatır.' },
         { name: '`/reroll [mesaj_id]`', value: 'Çekilişten yeni kazanan seçer.' },
         { name: '`/anket [kanal] [soru] [secenekler]`', value: 'Canlı sayaçlı anket başlatır.' },
         { name: '`/otomatik-kurulum`', value: 'Tüm klan altyapısını ve panellerini tek tıkla otomatik kurar.' },
@@ -3527,7 +3101,6 @@ function buildHelpMenu(category = 'home') {
         `👑 **Yetkili Mesai & Sıralama**\n` +
         `⚔️ **Klan, Minecraft & Canlı Sunucu Takibi**\n` +
         `🎫 **Kategorili Destek / Ticket**\n` +
-        `🏷️ **Klan Tagı (VYRN) Takip & Log**\n` +
         `🏆 **Turnuva, Event & IGN Kayıt**\n` +
         `🛡️ **Güvenlik, Anti-Raid & Moderasyon**\n` +
         `🎁 **Seviye, Bildirim Rolleri & Çekiliş**\n\n` +
@@ -5021,218 +4594,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `🧹 **${amount}** mesaj silindi!`, ephemeral: true });
       }
 
-      // 29. /tag-kanal
-      if (commandName === 'tag-kanal') {
-        const channel = interaction.options.getChannel('kanal');
-        const data = loadData();
-        data.tagLogChannelId = channel.id;
-        saveData(data);
 
-        return interaction.reply({
-          content: `✅ **Klan tagı takip ve log kanalı ayarlandı:** ${channel}\n` +
-                   `Artık klan tagı (**VYRN**) alanlar ve bırakanlar bu kanala otomatik raporlanacaktır! 🏷️🛡️`,
-          ephemeral: true
-        });
-      }
-
-      // 30. /tag-rol
-      if (commandName === 'tag-rol') {
-        const role = interaction.options.getRole('rol');
-        const data = loadData();
-        data.tagRoleId = role.id;
-        saveData(data);
-
-        return interaction.reply({
-          content: `✅ **Tag alanlara verilecek otomatik rol ayarlandı:** ${role}\n` +
-                   `İsmine klan tagımızı (**VYRN**) ekleyen üyelere bu rol otomatik tanımlanacaktır. 👑🏷️`,
-          ephemeral: true
-        });
-      }
-
-      // 31. /tag-zorunlu-rol
-      if (commandName === 'tag-zorunlu-rol') {
-        const action = interaction.options.getString('islem');
-        const role = interaction.options.getRole('rol');
-        const data = loadData();
-        if (!data.tagRequiredRoleIds) data.tagRequiredRoleIds = [];
-
-        if (action === 'ekle') {
-          if (!role) return interaction.reply({ content: '❌ Lütfen eklemek istediğiniz rolü seçiniz!', ephemeral: true });
-          if (!data.tagRequiredRoleIds.includes(role.id)) {
-            data.tagRequiredRoleIds.push(role.id);
-            saveData(data);
-          }
-          return interaction.reply({ content: `✅ ${role} rolü **Tag Zorunlu Rolleri** listesine eklendi! Artık bu role sahip olanlar tagı taşımak zorundadır ve taranacaktır. 🏷️⚔️`, ephemeral: true });
-        }
-
-        if (action === 'cikar') {
-          if (!role) return interaction.reply({ content: '❌ Lütfen çıkarmak istediğiniz rolü seçiniz!', ephemeral: true });
-          data.tagRequiredRoleIds = data.tagRequiredRoleIds.filter(id => id !== role.id);
-          saveData(data);
-          return interaction.reply({ content: `✅ ${role} rolü Tag Zorunlu Rolleri listesinden çıkarıldı.`, ephemeral: true });
-        }
-
-        if (action === 'liste') {
-          if (data.tagRequiredRoleIds.length === 0) {
-            return interaction.reply({ content: 'ℹ️ Özel eklenmiş bir tag zorunlu rolü bulunmuyor (Varsayılan olarak Klan Üyesi, Has Klan Üyesi ve Yetkililer zorunludur).', ephemeral: true });
-          }
-          const roleMentions = data.tagRequiredRoleIds.map(id => `• <@&${id}> (\`${id}\`)`).join('\n');
-          const listEmbed = new EmbedBuilder()
-            .setColor('#8B5CF6')
-            .setTitle('🏷️ Tag Zorunlu Olan Kayıtlı Roller')
-            .setDescription(`Aşağıdaki rollere sahip tüm üyelerin klan tagı (**VYRN**) taşıması zorunludur:\n\n${roleMentions}`)
-            .setFooter({ text: FOOTER_TEXT });
-
-          return interaction.reply({ embeds: [listEmbed], ephemeral: true });
-        }
-      }
-
-      // 32. /tag-tara
-      if (commandName === 'tag-tara') {
-        await interaction.deferReply({ ephemeral: true });
-        const targetRole = interaction.options.getRole('rol');
-        const shouldWarnDM = interaction.options.getBoolean('dm_uyar') ?? false;
-        const guild = interaction.guild;
-        const data = loadData();
-        if (!data.tagUsers) data.tagUsers = {};
-
-        // 1. Discord REST API'den tek istekte tüm üyelerin rozetlerini çek
-        await refreshGuildClanTags(guild).catch(() => {});
-
-        // 2. Üyeleri al (önbellekten anında çeker)
-        const members = guild.members.cache.size > 0
-          ? guild.members.cache
-          : await guild.members.fetch().catch(() => guild.members.cache);
-
-        // 3. Hedef kadroyu filtrele (Klan Üyeleri, Has Klan Üyeleri ve Yetkililer)
-        const targetMembers = Array.from(members.values()).filter(m => {
-          if (!m || !m.user || m.user.bot) return false;
-          return targetRole ? m.roles.cache.has(targetRole.id) : isClanOrStaffMember(m, data);
-        });
-
-        let tagCount = 0;
-        let totalTargetCount = targetMembers.length;
-        let nonTagClanMembers = [];
-
-        for (const member of targetMembers) {
-          const userId = member.id;
-          const hasTag = memberHasTag(member, data.tagText || 'VYRN');
-
-          const tagRole = (data.tagRoleId && guild.roles.cache.get(data.tagRoleId)) ||
-                          guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron tag') ||
-                          guild.roles.cache.find(r => r.name.toLowerCase() === 'vyron • tag') ||
-                          guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron') && r.name.toLowerCase().includes('tag')) ||
-                          guild.roles.cache.find(r => r.name.toLowerCase().includes('taglı') || r.name.toLowerCase().includes('tagli'));
-
-          if (hasTag) {
-            tagCount++;
-            data.tagUsers[userId] = {
-              hasTag: true,
-              warned: false,
-              lastTagChange: data.tagUsers[userId]?.lastTagChange || Date.now()
-            };
-            if (tagRole && !member.roles.cache.has(tagRole.id)) {
-              await member.roles.add(tagRole).catch(() => {});
-            }
-          } else {
-            if (data.tagUsers[userId]?.hasTag) {
-              data.tagUsers[userId].hasTag = false;
-            }
-            if (tagRole && member.roles.cache.has(tagRole.id)) {
-              await member.roles.remove(tagRole).catch(() => {});
-            }
-            nonTagClanMembers.push(member);
-          }
-        }
-
-        saveData(data);
-
-        let warnedCount = 0;
-        let dmClosedCount = 0;
-
-        // dm_uyar: True seçildiyse tagı olmayanlara güvenli aralıkla DM gönder
-        if (shouldWarnDM && nonTagClanMembers.length > 0) {
-          for (const member of nonTagClanMembers) {
-            try {
-              await member.send({
-                content: `⚠️ **UYARI:** **${guild.name}** klanımızın resmi tagı olan **VYRN** tagını taşımadığınız tespit edildi!\n\n` +
-                  `📌 Lütfen klan tagımızı en kısa sürede isminize ekleyiniz. **Aksi takdirde klandan atılacaksınız.** ⚔️`
-              });
-              warnedCount++;
-            } catch (e) {
-              dmClosedCount++;
-            }
-            // Discord rate limit koruması (500ms güvenli aralık)
-            await new Promise(r => setTimeout(r, 500));
-          }
-        }
-
-        const chTagLog = await getOrCreateTagLogChannel(guild);
-
-        const nonTagStaff = nonTagClanMembers.filter(m => isStaffMember(m, data));
-        const nonTagMembers = nonTagClanMembers.filter(m => !isStaffMember(m, data));
-
-        let nonTagText = '';
-        if (nonTagClanMembers.length === 0) {
-          nonTagText = '✅ *Taranan kadrodaki tüm üyelerde klan tagı (**VYRN**) eksiksiz bulunmaktadır!*';
-        } else {
-          if (nonTagStaff.length > 0) {
-            nonTagText += `👑 **Tagı Olmayan Yetkililer (${nonTagStaff.length} Kişi):**\n` +
-              nonTagStaff.slice(0, 15).map(m => `• ${m} (\`${m.user.tag}\`) - <@&${m.roles.highest.id}>`).join('\n') +
-              (nonTagStaff.length > 15 ? `\n*...ve ${nonTagStaff.length - 15} yetkili daha.*` : '') + '\n\n';
-          }
-          if (nonTagMembers.length > 0) {
-            nonTagText += `⚔️ **Tagı Olmayan Klan Üyeleri (${nonTagMembers.length} Kişi):**\n` +
-              nonTagMembers.slice(0, 20).map(m => `• ${m} (\`${m.user.tag}\`)`).join('\n') +
-              (nonTagMembers.length > 20 ? `\n*...ve ${nonTagMembers.length - 20} üye daha.*` : '');
-          }
-        }
-
-        const progressBar = generateProgressBar(tagCount, totalTargetCount);
-        const tagPercent = totalTargetCount > 0 ? Math.round((tagCount / totalTargetCount) * 100) : 0;
-
-        const scanEmbed = new EmbedBuilder()
-          .setColor(nonTagClanMembers.length > 0 ? '#F59E0B' : '#10B981')
-          .setAuthor({ name: `${guild.name} • Tag Kontrol & Denetim`, iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle(`🏷️ ${targetRole ? `${targetRole.name.toUpperCase()} ROLÜ` : 'KLAN & YETKİLİ'} TAGI TARAMA RAPORU`)
-          .setDescription(
-            `Sunucudaki **${targetRole ? `${targetRole} Rolüne Sahip Üyeler` : 'Klan & Yetkili Kadrosu'}** tarandı.\n` +
-            `*(Normal topluluk üyeleri tag taşımak zorunda değildir).* \n\n` +
-            `📊 **Taranan Kadro:** \`${totalTargetCount} Kişi\`\n` +
-            `📈 **Klan Tagı Doluluk Oranı:** ${progressBar}\n` +
-            `✅ **Tagı Olanlar:** \`${tagCount} Kişi (%${tagPercent})\`\n` +
-            `⚠️ **Tagı Eksik Olanlar:** \`${nonTagClanMembers.length} Kişi\`\n` +
-            `🏷️ **Resmi Klan Tagı:** \`${data.tagText || 'VYRN'} / [⚡ VYRN]\`\n` +
-            `📢 **Canlı Log Kanalı:** ${chTagLog ? chTagLog : '`#tag-log`'}\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-            `### ⚠️ Tagı Eksik Olan Kişilerin Listesi:\n\n` +
-            nonTagText
-          )
-          .setFooter({ text: `${FOOTER_TEXT} • Tag Denetim Sistemi` })
-          .setTimestamp();
-
-        if (shouldWarnDM) {
-          scanEmbed.addFields({
-            name: '📬 Otomatik DM Uyarı Raporu',
-            value: `✅ **${warnedCount}** üyeye özelden DM uyarısı iletildi!${dmClosedCount > 0 ? `\n🔒 *(${dmClosedCount} kişinin DM kutusu kapalı olduğu için iletilemedi).*` : ''}`,
-            inline: false
-          });
-        }
-
-        const components = [];
-        if (!shouldWarnDM && nonTagClanMembers.length > 0) {
-          const warnBtnRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`btn_tag_dm_warn_${targetRole ? targetRole.id : 'all'}`)
-              .setLabel(`📩 Tagı Olmayanlara DM Uyarısı Gönder (${nonTagClanMembers.length})`)
-              .setStyle(ButtonStyle.Danger)
-              .setEmoji('⚠️')
-          );
-          components.push(warnBtnRow);
-        }
-
-        return interaction.editReply({ embeds: [scanEmbed], components });
-      }
 
       // 33. /gear-kanal
       if (commandName === 'gear-kanal') {
@@ -6389,59 +5751,6 @@ client.on('interactionCreate', async (interaction) => {
           components: [row]
         });
       }
-
-      // 0. TAGI OLMAYANLARA DM UYARISI GÖNDERME BUTONU
-      if (customId.startsWith('btn_tag_dm_warn_')) {
-        const guild = interaction.guild;
-        const member = interaction.member;
-
-        const data = loadData();
-        if (!isStaffMember(member, data)) {
-          return interaction.reply({ content: '❌ Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
-        }
-
-        const roleId = customId.replace('btn_tag_dm_warn_', '');
-        const targetRole = roleId !== 'all' ? guild.roles.cache.get(roleId) : null;
-        // data zaten yukarıda yüklendi
-
-        await interaction.deferReply({ ephemeral: true });
-        await refreshGuildClanTags(guild).catch(() => {});
-
-        const members = guild.members.cache.size > 0
-          ? guild.members.cache
-          : await guild.members.fetch().catch(() => guild.members.cache);
-
-        const targetMembers = Array.from(members.values()).filter(m => {
-          if (!m || !m.user || m.user.bot) return false;
-          return targetRole ? m.roles.cache.has(targetRole.id) : isClanOrStaffMember(m, data);
-        });
-
-        let warnedCount = 0;
-        let dmClosedCount = 0;
-
-        for (const m of targetMembers) {
-          const hasTag = memberHasTag(m, data.tagText || 'VYRN');
-          if (!hasTag) {
-            try {
-              await m.send({
-                content: `⚠️ **UYARI:** **${guild.name}** klanımızın resmi tagı olan **VYRN** tagını taşımadığınız tespit edildi!\n\n` +
-                  `📌 Lütfen klan tagımızı en kısa sürede isminize ekleyiniz. **Aksi takdirde klandan atılacaksınız.** ⚔️`
-              });
-              warnedCount++;
-            } catch (e) {
-              dmClosedCount++;
-            }
-            await new Promise(r => setTimeout(r, 500));
-          }
-        }
-
-        return interaction.editReply({
-          content: `✅ **İşlem Tamamlandı!**\n` +
-            `📨 **${warnedCount}** klan üyesine özelden DM uyarısı başarıyla gönderildi!\n` +
-            (dmClosedCount > 0 ? `🔒 *(${dmClosedCount} kişinin DM kutusu kapalı olduğu için mesaj iletilemedi).*` : '')
-        });
-      }
-
       // 1. ANKET OYLAMA
       if (customId.startsWith('poll_vote_yes_') || customId.startsWith('poll_vote_no_')) {
         const isYes = customId.startsWith('poll_vote_yes_');
@@ -6721,7 +6030,7 @@ client.on('interactionCreate', async (interaction) => {
 
         // Katılım Şartı Kontrolü
         if (gw.reqOption && gw.reqOption !== 'none' && !gw.participants.has(userId)) {
-          const hasTag = memberHasTag(member, data.tagText || 'VYRN') || (data.tagRoleId && member.roles.cache.has(data.tagRoleId));
+          const hasTag = true; // Tag sistemi kaldırıldı
           const hasAbone = data.aboneRoleId && member.roles.cache.has(data.aboneRoleId);
 
           if (gw.reqOption === 'tag' && !hasTag) {
