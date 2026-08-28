@@ -54,7 +54,7 @@ http.createServer((req, res) => {
 });
 
 // ==========================================
-// 2. VERİ YÖNETİMİ & SABİTLER
+// 2. VERİ YÖNETİMİ & DISCORD BULUT VERİTABANI
 // ==========================================
 const DATA_FILE = path.join(__dirname, 'data.json');
 const FOOTER_TEXT = 'Vyron Klanı • Güvenli Sistemler';
@@ -92,11 +92,121 @@ function loadData() {
   };
 }
 
-function saveData(data) {
+let cloudSaveTimeout = null;
+
+function triggerCloudSave() {
+  if (cloudSaveTimeout) clearTimeout(cloudSaveTimeout);
+  cloudSaveTimeout = setTimeout(async () => {
+    try {
+      for (const [_, guild] of client.guilds.cache) {
+        await syncDataToDiscordCloud(guild);
+      }
+    } catch (e) {}
+  }, 3000);
+}
+
+function saveData(data, triggerSync = true) {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+    if (triggerSync) {
+      triggerCloudSave();
+    }
   } catch (err) {
     console.error('Veri kaydetme hatası:', err);
+  }
+}
+
+// ----------------------------------------------------
+// DISCORD BULUT VERİTABANI (Render Kapansa Bile Veriler ASLA Silinmez)
+// ----------------------------------------------------
+async function getOrCreateBackupChannel(guild) {
+  try {
+    const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    let ch = channels.find(c => c && c.type === ChannelType.GuildText && (c.name.includes('vyron-bot-data') || c.name.includes('bot-data-backup') || c.name.includes('bot-yedek')));
+    if (!ch) {
+      ch = await guild.channels.create({
+        name: '💾・vyron-bot-data',
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+        ]
+      });
+    }
+    return ch;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function syncDataFromDiscordCloud(guild) {
+  try {
+    const ch = await getOrCreateBackupChannel(guild);
+    if (!ch) return;
+
+    const messages = await ch.messages.fetch({ limit: 5 }).catch(() => null);
+    if (!messages || messages.size === 0) return;
+
+    const lastMsg = messages.find(m => m.content && m.content.includes('```json'));
+    if (!lastMsg) return;
+
+    const jsonMatch = lastMsg.content.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonMatch && jsonMatch[1]) {
+      const cloudData = JSON.parse(jsonMatch[1]);
+      const localData = loadData();
+
+      // Buluttaki rolleri ve ayarları yerel veriye birleştir
+      if (cloudData.ticketStaffRoleIds && cloudData.ticketStaffRoleIds.length > 0) {
+        localData.ticketStaffRoleIds = Array.from(new Set([...localData.ticketStaffRoleIds, ...cloudData.ticketStaffRoleIds]));
+      }
+      if (cloudData.applyStaffRoleIds && cloudData.applyStaffRoleIds.length > 0) {
+        localData.applyStaffRoleIds = Array.from(new Set([...localData.applyStaffRoleIds, ...cloudData.applyStaffRoleIds]));
+      }
+      if (cloudData.ticketCategoryId) localData.ticketCategoryId = cloudData.ticketCategoryId;
+      if (cloudData.applyCategoryId) localData.applyCategoryId = cloudData.applyCategoryId;
+      if (cloudData.applyClanRoleId) localData.applyClanRoleId = cloudData.applyClanRoleId;
+      if (cloudData.aboneChannelId) localData.aboneChannelId = cloudData.aboneChannelId;
+      if (cloudData.aboneRoleId) localData.aboneRoleId = cloudData.aboneRoleId;
+      if (cloudData.aboneLogChannelId) localData.aboneLogChannelId = cloudData.aboneLogChannelId;
+      if (cloudData.userSubscribedChannels) {
+        localData.userSubscribedChannels = { ...localData.userSubscribedChannels, ...cloudData.userSubscribedChannels };
+      }
+
+      saveData(localData, false);
+      console.log(`💾 Discord Bulut Veritabanından veriler başarıyla geri yüklendi: ${guild.name}`);
+    }
+  } catch (err) {
+    console.error('Bulut veri senkronizasyon hatası:', err);
+  }
+}
+
+async function syncDataToDiscordCloud(guild) {
+  try {
+    const ch = await getOrCreateBackupChannel(guild);
+    if (!ch) return;
+
+    const data = loadData();
+    const backupJson = JSON.stringify({
+      ticketStaffRoleIds: data.ticketStaffRoleIds,
+      applyStaffRoleIds: data.applyStaffRoleIds,
+      ticketCategoryId: data.ticketCategoryId,
+      applyCategoryId: data.applyCategoryId,
+      applyClanRoleId: data.applyClanRoleId,
+      aboneChannelId: data.aboneChannelId,
+      aboneRoleId: data.aboneRoleId,
+      aboneLogChannelId: data.aboneLogChannelId,
+      userSubscribedChannels: data.userSubscribedChannels,
+      savedAt: new Date().toISOString()
+    }, null, 2);
+
+    await ch.send({
+      content: `📦 **Otomatik Bulut Yedekleme [${new Date().toLocaleString('tr-TR')}]:**
+\`\`\`json
+${backupJson}
+\`\`\``
+    });
+  } catch (err) {
+    console.error('Bulut veri kaydetme hatası:', err);
   }
 }
 
@@ -105,10 +215,21 @@ const activeClaimedTickets = new Map(); // channelId -> { claimedBy, claimedAt }
 const ticketTranscripts = new Map();     // channelId -> Array<{ author, content, timestamp }>
 
 // ==========================================
-// 3. YAPAY ZEKA (OCR) MOTORU (2 KANAL & TAM EKRAN ZORUNLU)
+// 3. YAPAY ZEKA (OCR) MOTORU (2 KANAL, 1080P BOYUT & SAAT ZORUNLU)
 // ==========================================
-async function analyzeYoutubeScreenshot(imageUrl) {
+async function analyzeYoutubeScreenshot(imageUrl, width, height) {
   try {
+    // 0. ÇÖZÜNÜRLÜK & BOYUT KONTROLÜ (Kırpılmış / Küçük Görsel Engeli)
+    if (width && height) {
+      if (width < 900 && height < 900) {
+        return {
+          isValid: false,
+          reason: 'low_resolution',
+          message: 'Yüklediğiniz görsel 1080p tam ekran boyutunda değil (kırpılmış)! Lütfen orijinal tam ekran SS yükleyiniz.'
+        };
+      }
+    }
+
     if (!Tesseract) {
       try {
         Tesseract = require('tesseract.js');
@@ -141,7 +262,12 @@ async function analyzeYoutubeScreenshot(imageUrl) {
     ];
     const hasSub = subKeywords.some(k => cleanText.includes(k));
 
-    // 2. TAM EKRAN / ARAYÜZ (FULLSCREEN) KONTROLÜ
+    // 2. SAAT & ZAMAN GÖSTERGESİ KONTROLÜ (ZORUNLU)
+    // 00:00 - 23:59 veya 1:00 - 12:59 formatında saat kontrolü
+    const hasClockTime = /\b([01]?[0-9]|2[0-3])[:.][0-5][0-9]\b/.test(cleanText) ||
+                         /\b(1[0-2]|0?[1-9])[:.][0-5][0-9]\s*(am|pm)?\b/.test(cleanText);
+
+    // 3. TAM EKRAN ARAYÜZ ELEMANLARI
     const uiKeywords = [
       'shorts', 'abonelikler', 'kitaplik', 'ana sayfa', 'home', 'subscriptions',
       'library', 'you', 'youtube', 'video', 'videolar', 'oynatma', 'begen',
@@ -150,14 +276,12 @@ async function analyzeYoutubeScreenshot(imageUrl) {
       'google', 'opera', 'edge', 'com', 'http', 'https', 'abone ol'
     ];
     const matchedUI = uiKeywords.filter(k => cleanText.includes(k));
-    
-    // Saat Formatı Tespiti (Örn: 14:35, 20.15, 8:40, 11:22 PM)
-    const timeMatch = cleanText.match(/\b\d{1,2}[:.]\d{2}\b/);
-    const hasTimeOrBattery = timeMatch !== null || cleanText.includes('%') || cleanText.includes('4g') || cleanText.includes('5g') || cleanText.includes('lte') || cleanText.includes('wifi');
+    const hasBatteryOrNet = cleanText.includes('%') || cleanText.includes('4g') || cleanText.includes('5g') || cleanText.includes('lte') || cleanText.includes('wifi') || cleanText.includes('volte');
 
-    const isFullScreen = (matchedUI.length >= 2) || (hasTimeOrBattery && matchedUI.length >= 1) || matchedUI.length >= 3;
+    // Tam ekran sayılması için: Saat MUTLAKA görünmeli ve en az 1-2 arayüz öğesi olmalı
+    const isFullScreen = hasClockTime && (matchedUI.length >= 1 || hasBatteryOrNet);
 
-    // 3. HEDEF KANAL KONTROLÜ (1. Kanal: @birimfonksiyons / 2. Kanal: @xFrozzeq)
+    // 4. HEDEF KANAL KONTROLÜ (1. Kanal: @birimfonksiyons / 2. Kanal: @xFrozzeq)
     const isBirimChannel = cleanText.includes('birimfonksiyons') ||
                            cleanText.includes('birimfonksiyon') ||
                            cleanText.includes('birim') ||
@@ -173,7 +297,7 @@ async function analyzeYoutubeScreenshot(imageUrl) {
     const detectedBirim = isBirimChannel || isVyronChannel;
     const detectedFroz = isFrozChannel;
 
-    // Doğrulama Kontrolleri
+    // Doğrulama Hata Kontrolleri
     if (!hasSub) {
       return {
         isValid: false,
@@ -182,11 +306,11 @@ async function analyzeYoutubeScreenshot(imageUrl) {
       };
     }
 
-    if (!isFullScreen) {
+    if (!hasClockTime || !isFullScreen) {
       return {
         isValid: false,
-        reason: 'not_fullscreen',
-        message: 'Yüklediğiniz görsel kırpılmış görünüyor! Lütfen saat, şarj veya tarayıcı çubuğunun gözüktüğü TAM EKRAN ekran görüntüsü yükleyiniz.'
+        reason: 'not_fullscreen_or_no_clock',
+        message: 'Görselde telefon/bilgisayar SAATİ veya 1080p tam ekran arayüzü tespit edilemedi! Lütfen saatin ve arayüzün net gözüktüğü TAM EKRAN SS atınız.'
       };
     }
 
@@ -202,7 +326,8 @@ async function analyzeYoutubeScreenshot(imageUrl) {
       isValid: true,
       detectedBirim,
       detectedFroz,
-      isFullScreen: true
+      isFullScreen: true,
+      hasClockTime: true
     };
   } catch (error) {
     console.error('OCR Analiz Hatası:', error);
@@ -212,7 +337,29 @@ async function analyzeYoutubeScreenshot(imageUrl) {
 
 // ==========================================
 // 4. YARDIMCI FONKSİYONLAR
-// ==========================================
+function getAllStaffRoles(guild, data) {
+  const staffRoleIds = new Set([
+    ...(data?.ticketStaffRoleIds || []),
+    ...(data?.applyStaffRoleIds || [])
+  ]);
+
+  const staffKeywords = [
+    'aac', 'ticket yetkili', 'ticket', 'denetleyici', 'denetimci', 'denetim',
+    'd. admin', 'd.admin', 'd. mod', 'd.mod', 'admin', 'mod', 'yetkili',
+    'staff', 'yönetici', 'yonetici', 'kurucu', 'lider', 'kontrol'
+  ];
+
+  return guild.roles.cache.filter(role => {
+    if (staffRoleIds.has(role.id)) return true;
+    if (role.permissions.has(PermissionFlagsBits.Administrator)) return true;
+    if (role.permissions.has(PermissionFlagsBits.ManageGuild)) return true;
+    if (role.permissions.has(PermissionFlagsBits.ModerateMembers)) return true;
+    
+    const name = role.name.toLowerCase();
+    return staffKeywords.some(kw => name.includes(kw));
+  });
+}
+
 function isStaffMember(member, data) {
   if (!member) return false;
   if (member.guild && member.id === member.guild.ownerId) return true;
@@ -506,13 +653,16 @@ client.once('ready', async () => {
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
   try {
-    console.log('⚡ Slash komutları yükleniyor...');
+    console.log('⚡ Sunucu verileri ve Slash komutları yükleniyor...');
     for (const [guildId, guild] of client.guilds.cache) {
+      // 💾 Discord Bulut Veritabanından tüm yetkili rollerini ve ayarları yükle
+      await syncDataFromDiscordCloud(guild).catch(() => {});
+
       await rest.put(
         Routes.applicationGuildCommands(client.user.id, guildId),
         { body: commands.map(cmd => cmd.toJSON()) }
       );
-      console.log(`✅ Komutlar yüklendi: ${guild.name} (${guildId})`);
+      console.log(`✅ Komutlar ve Bulut Verileri yüklendi: ${guild.name} (${guildId})`);
     }
 
     // Global komutları temizle
@@ -527,6 +677,7 @@ client.once('ready', async () => {
 
 client.on('guildCreate', async (guild) => {
   try {
+    await syncDataFromDiscordCloud(guild).catch(() => {});
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, guild.id),
@@ -558,7 +709,7 @@ client.on('messageCreate', async (message) => {
       if (isImage) {
         await message.react('⏳').catch(() => {});
 
-        const ocrResult = await analyzeYoutubeScreenshot(attachment.url);
+        const ocrResult = await analyzeYoutubeScreenshot(attachment.url, attachment.width, attachment.height);
 
         if (ocrResult.isValid) {
           const userId = message.author.id;
@@ -660,14 +811,14 @@ client.on('messageCreate', async (message) => {
           let failTitle = '❌ ABONELİK TESPİT EDİLEMEDİ';
           let failDesc = `Sayın ${message.author},\n\nYüklediğiniz ekran görüntüsünde **"Abone Olundu"** veya **"Subscribed"** yazısı net olarak tespit edilemedi.\n\n📌 Lütfen resmi YouTube kanallarımıza abone olup **tam ekran** bir görüntü yükleyiniz.`;
 
-          if (ocrResult.reason === 'not_fullscreen') {
-            failTitle = '⚠️ TAM EKRAN EKRAN GÖRÜNTÜSÜ GEREKLİ';
+          if (ocrResult.reason === 'not_fullscreen_or_no_clock' || ocrResult.reason === 'low_resolution') {
+            failTitle = '⚠️ TAM EKRAN & SAAT GÖSTERGESİ GEREKLİ';
             failDesc = `Sayın ${message.author},\n\n` +
-              `Yüklediğiniz ekran görüntüsü **kırpılmış** olarak algılandı!\n\n` +
-              `🛡️ **Sahte / Kırpılmış SS Koruması:**\n` +
-              `• Lütfen sadece abone butonunu kırparak atmayınız.\n` +
-              `• **Telefonun üst saati, şarj yüzdesi** veya **bilgisayarın tarayıcı / görev çubuğunun** gözüktüğü **TAM EKRAN (Fullscreen)** ekran görüntüsü yükleyiniz.\n\n` +
-              `🔍 *Sistemimiz kırpılmış görselleri güvenlik amacıyla otomatik olarak reddetmektedir.*`;
+              `Yüklediğiniz ekran görüntüsü **tam ekran (1080p) veya saat içermiyor** olarak algılandı!\n\n` +
+              `🛡️ **Tam Ekran & Güvenlik Kuralı:**\n` +
+              `• 💻 **Bilgisayarda:** Ekranın sağ altındaki **Saat / Tarih** ve tarayıcı sekmesi **MUTLAKA** gözükmelidir.\n` +
+              `• 📱 **Telefonda:** Ekranın en üstündeki **Saat, Pil / Şarj yüzdesi** net gözükmelidir.\n` +
+              `• ❌ *Kırpılmış veya saat gözükmeyen ekran görüntüleri kabul edilmemektedir.*`;
           } else if (ocrResult.reason === 'wrong_channel') {
             failTitle = '❌ HEDEF RESMİ KANAL BULUNAMADI';
             failDesc = `Sayın ${message.author},\n\n` +
@@ -1067,7 +1218,7 @@ client.on('interactionCreate', async (interaction) => {
       };
 
       const deptTitle = deptNames[selected] || 'Destek';
-      const staffRoleIds = data.ticketStaffRoleIds || [];
+      const staffRoles = getAllStaffRoles(guild, data);
 
       const overwrites = [
         {
@@ -1084,15 +1235,13 @@ client.on('interactionCreate', async (interaction) => {
         }
       ];
 
-      for (const rId of staffRoleIds) {
-        const r = guild.roles.cache.get(rId);
-        if (r) {
-          overwrites.push({
-            id: r.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory]
-          });
-        }
-      }
+      // Tüm yetkili rollerini (AAC, Denetleyici, Admin, Mod, Ticket Yetkilisi vb.) komutsuz otomatik ekle
+      staffRoles.forEach(r => {
+        overwrites.push({
+          id: r.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory]
+        });
+      });
 
       const cleanUserName = user.username.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 15);
       const ticketChannel = await guild.channels.create({
@@ -1127,7 +1276,7 @@ client.on('interactionCreate', async (interaction) => {
         new ButtonBuilder().setCustomId('ticket_close_action').setLabel('🔒 Talebi Kapat').setStyle(ButtonStyle.Danger).setEmoji('🗑️')
       );
 
-      const staffMentions = staffRoleIds.map(id => `<@&${id}>`).join(' ') || '@here';
+      const staffMentions = staffRoles.map(r => `<@&${r.id}>`).slice(0, 5).join(' ') || '@here';
       await ticketChannel.send({ content: `${user} | ${staffMentions}`, embeds: [welcomeEmbed], components: [row] });
 
       return interaction.editReply({ content: `✅ Destek talebiniz oluşturuldu: ${ticketChannel}` });
@@ -1203,7 +1352,7 @@ client.on('interactionCreate', async (interaction) => {
 
       await interaction.deferReply({ ephemeral: true });
 
-      const staffRoleIds = data.applyStaffRoleIds || [];
+      const staffRoles = getAllStaffRoles(guild, data);
       const overwrites = [
         {
           id: guild.roles.everyone.id,
@@ -1219,15 +1368,13 @@ client.on('interactionCreate', async (interaction) => {
         }
       ];
 
-      for (const rId of staffRoleIds) {
-        const r = guild.roles.cache.get(rId);
-        if (r) {
-          overwrites.push({
-            id: r.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory]
-          });
-        }
-      }
+      // Tüm klan yetkili rollerini (AAC, Denetleyici, Admin, Mod vb.) komutsuz otomatik ekle
+      staffRoles.forEach(r => {
+        overwrites.push({
+          id: r.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory]
+        });
+      });
 
       const cleanUserName = user.username.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 15);
       const applyChannel = await guild.channels.create({
@@ -1270,7 +1417,7 @@ client.on('interactionCreate', async (interaction) => {
         new ButtonBuilder().setCustomId(`btn_apply_cheat_${user.id}`).setLabel('🚫 Hileli (Logla & Reddet)').setStyle(ButtonStyle.Danger)
       );
 
-      const staffMentions = staffRoleIds.map(id => `<@&${id}>`).join(' ') || '@here';
+      const staffMentions = staffRoles.map(r => `<@&${r.id}>`).slice(0, 5).join(' ') || '@here';
       await applyChannel.send({ content: `📢 ${user} klan başvurusunda bulundu! ${staffMentions}`, embeds: [formEmbed], components: [row1, row2] });
 
       return interaction.editReply({ content: `✅ Klan başvurunuz başarıyla alındı ve odanız açıldı: ${applyChannel}` });
