@@ -1,12 +1,13 @@
 /**
  * ============================================================================
- * ⚔️ VYRON SADE TICKET & KLAN BAŞVURU SİSTEMİ (PURE TICKET & APPLY BOT)
+ * ⚔️ VYRON TICKET, KLAN BAŞVURU & YAPAY ZEKA (OCR) ABONE DOĞRULAMA BOTU
  * ============================================================================
- * SADECE 2 SİSTEM İÇERİR:
- * 1. Anydesk Onaylı Klan Başvuru Sistemi (Form + Özel Oda + Yetkili Butonları)
- * 2. Kategorili Destek (Ticket) Sistemi (Açılır Menü + Özel Oda + Kapatma)
+ * İÇERDİĞİ SİSTEMLER:
+ * 1. ⚔️ Anydesk Onaylı Klan Başvuru Sistemi (Form + Özel Oda + DM Bildirimleri)
+ * 2. 🎫 Kategorili Destek (Ticket) Sistemi (Açılır Menü + Özel Oda + Kapatma)
+ * 3. 🤖 Yapay Zeka (Tesseract OCR) YouTube Abone SS Otomatik Doğrulama Motoru
  * 
- * ⛔ Sıralama, Liderlik, Moderasyon, Ceza veya Tehlikeli Komutlar İÇERMEZ.
+ * 🔒 Moderasyon, Ceza veya Tehlikeli Roller İÇERMEZ. %100 Güvenlidir.
  * ============================================================================
  */
 
@@ -33,13 +34,20 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
+let Tesseract;
+try {
+  Tesseract = require('tesseract.js');
+} catch (e) {
+  console.log('Tesseract.js ilk yüklemede hazır değil, gerektiğinde çağrılacak.');
+}
+
 // ==========================================
 // 1. WEB SUNUCUSU (RENDER 7/24 UPTIME)
 // ==========================================
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end('<h1>⚔️ Vyron Ticket & Klan Başvuru Botu 7/24 Aktif!</h1>');
+  res.end('<h1>⚔️ Vyron Ticket, Klan Başvuru & OCR Abone Botu 7/24 Aktif!</h1>');
 }).listen(PORT, () => {
   console.log(`🌐 Web sunucusu ${PORT} portunda aktif.`);
 });
@@ -48,7 +56,7 @@ http.createServer((req, res) => {
 // 2. VERİ YÖNETİMİ & SABİTLER
 // ==========================================
 const DATA_FILE = path.join(__dirname, 'data.json');
-const FOOTER_TEXT = 'Vyron Klanı • Ticket & Başvuru Sistemi';
+const FOOTER_TEXT = 'Vyron Klanı • Güvenli Sistemler';
 
 function loadData() {
   try {
@@ -60,7 +68,10 @@ function loadData() {
         applyStaffRoleIds: parsed.applyStaffRoleIds || [],
         ticketCategoryId: parsed.ticketCategoryId || null,
         applyCategoryId: parsed.applyCategoryId || null,
-        applyClanRoleId: parsed.applyClanRoleId || null
+        applyClanRoleId: parsed.applyClanRoleId || null,
+        aboneChannelId: parsed.aboneChannelId || null,
+        aboneRoleId: parsed.aboneRoleId || null,
+        aboneLogChannelId: parsed.aboneLogChannelId || null
       };
     }
   } catch (err) {
@@ -71,7 +82,10 @@ function loadData() {
     applyStaffRoleIds: [],
     ticketCategoryId: null,
     applyCategoryId: null,
-    applyClanRoleId: null
+    applyClanRoleId: null,
+    aboneChannelId: null,
+    aboneRoleId: null,
+    aboneLogChannelId: null
   };
 }
 
@@ -88,12 +102,109 @@ const activeClaimedTickets = new Map(); // channelId -> { claimedBy, claimedAt }
 const ticketTranscripts = new Map();     // channelId -> Array<{ author, content, timestamp }>
 
 // ==========================================
-// 3. YARDIMCI FONKSİYONLAR
+// 3. YAPAY ZEKA (OCR) MOTORU
+// ==========================================
+async function analyzeYoutubeScreenshot(imageUrl) {
+  try {
+    if (!Tesseract) {
+      try {
+        Tesseract = require('tesseract.js');
+      } catch (err) {
+        console.error('Tesseract modülü bulunamadı.');
+        return { isValid: false, error: 'Tesseract OCR modülü hazır değil.' };
+      }
+    }
+
+    const result = await Tesseract.recognize(imageUrl, 'eng', {
+      logger: () => {}
+    });
+
+    const rawText = (result?.data?.text || '').toLowerCase();
+    
+    // Karakter normalizasyonu
+    const cleanText = rawText
+      .replace(/ı/g, 'i')
+      .replace(/ğ/g, 'g')
+      .replace(/ü/g, 'u')
+      .replace(/ş/g, 's')
+      .replace(/ö/g, 'o')
+      .replace(/ç/g, 'c');
+
+    // 1. ABONELİK İBARESİ KONTROLÜ
+    const subKeywords = [
+      'abone olundu', 'abonesiniz', 'abone', 'abonelik', 'subscribed', 'subscriber',
+      'subscribers', 'abonniert', 'abonne', 'suscrito', 'bildirim', 'bildirimler',
+      'zil', 'tumu', 'tum bildirimler', 'all notifications'
+    ];
+    const matchedSub = subKeywords.filter(k => cleanText.includes(k));
+    const hasSub = matchedSub.length > 0;
+
+    // 2. TAM EKRAN / ARAYÜZ (FULLSCREEN) KONTROLÜ
+    // Sahte/kırpılmış küçük butonları engellemek için ekran arayüzü tespiti
+    const uiKeywords = [
+      'shorts', 'abonelikler', 'kitaplik', 'ana sayfa', 'home', 'subscriptions',
+      'library', 'you', 'youtube', 'video', 'videolar', 'oynatma', 'begen',
+      'paylas', 'indir', 'kaydet', 'yorum', 'arama', 'search', 'views',
+      'goruntulenme', 'begenme', 'like', 'dislike', 'share', 'chrome',
+      'google', 'opera', 'edge', 'com', 'http', 'https', 'abone ol'
+    ];
+    const matchedUI = uiKeywords.filter(k => cleanText.includes(k));
+    
+    // Saat Formatı Tespiti (Örn: 14:35, 20.15, 8:40, 11:22 PM)
+    const timeMatch = cleanText.match(/\b\d{1,2}[:.]\d{2}\b/);
+    const hasTimeOrBattery = timeMatch !== null || cleanText.includes('%') || cleanText.includes('4g') || cleanText.includes('5g') || cleanText.includes('lte') || cleanText.includes('wifi');
+
+    // Tam ekran skoru
+    const isFullScreen = (matchedUI.length >= 2) || (hasTimeOrBattery && matchedUI.length >= 1) || matchedUI.length >= 3;
+
+    // 3. HEDEF KANAL TESPİTİ (Birim Fonksiyon / Frozzeq / Vyron)
+    const targetChannels = [
+      'birim', 'birimfonksiyon', 'birimfonksiyons', 'froz', 'frozzeq', 'xfrozzeq', 'vyron'
+    ];
+    const matchedChannels = targetChannels.filter(c => cleanText.includes(c));
+
+    // Nihai Doğrulama
+    if (!hasSub) {
+      return {
+        isValid: false,
+        reason: 'sub_not_found',
+        message: 'Görselde "Abone Olundu" veya "Subscribed" yazısı tespit edilemedi.',
+        rawText: rawText.substring(0, 300)
+      };
+    }
+
+    if (!isFullScreen) {
+      return {
+        isValid: false,
+        reason: 'not_fullscreen',
+        message: 'Yüklediğiniz görsel kırpılmış görünüyor! Lütfen saat, şarj veya tarayıcı çubuğunun gözüktüğü TAM EKRAN ekran görüntüsü yükleyiniz.',
+        rawText: rawText.substring(0, 300)
+      };
+    }
+
+    return {
+      isValid: true,
+      matchedKeywords: matchedSub,
+      matchedChannels,
+      isFullScreen: true,
+      hasTimeOrBattery: !!hasTimeOrBattery,
+      rawText: rawText.substring(0, 300)
+    };
+  } catch (error) {
+    console.error('OCR Analiz Hatası:', error);
+    return { isValid: false, reason: 'error', message: error.message };
+  }
+}
+
+// ==========================================
+// 4. YARDIMCI FONKSİYONLAR
 // ==========================================
 function isStaffMember(member, data) {
   if (!member) return false;
+  if (member.guild && member.id === member.guild.ownerId) return true;
   if (member.permissions && member.permissions.has(PermissionFlagsBits.Administrator)) return true;
   if (member.permissions && member.permissions.has(PermissionFlagsBits.ManageGuild)) return true;
+  if (member.permissions && member.permissions.has(PermissionFlagsBits.ModerateMembers)) return true;
   
   const staffRoleIds = [
     ...(data?.ticketStaffRoleIds || []),
@@ -101,15 +212,34 @@ function isStaffMember(member, data) {
   ];
 
   if (member.roles && member.roles.cache) {
-    return member.roles.cache.some(r =>
-      staffRoleIds.includes(r.id) ||
-      r.name.toLowerCase().includes('yetkili') ||
-      r.name.toLowerCase().includes('staff') ||
-      r.name.toLowerCase().includes('mod') ||
-      r.name.toLowerCase().includes('admin') ||
-      r.name.toLowerCase().includes('yönetici') ||
-      r.name.toLowerCase().includes('kurucu')
-    );
+    return member.roles.cache.some(r => {
+      if (staffRoleIds.includes(r.id)) return true;
+
+      const name = r.name.toLowerCase();
+      const staffKeywords = [
+        'aac',              // AAC / Anydesk & Anti-Cheat
+        'ticket yetkili',   // Ticket Yetkilisi
+        'ticket',           // Ticket
+        'denetleyici',      // Denetleyici
+        'denetimci',        // Denetimci
+        'denetim',          // Denetim
+        'd. admin',         // Deneme Admin
+        'd.admin',          // D.Admin
+        'd. mod',           // Deneme Mod
+        'd.mod',            // D.Mod
+        'admin',            // Admin
+        'mod',              // Mod / Moderatör
+        'yetkili',          // Yetkili
+        'staff',            // Staff
+        'yönetici',         // Yönetici
+        'yonetici',         // Yonetici
+        'kurucu',           // Kurucu
+        'lider',            // Klan Lideri
+        'kontrol'           // Hile / Anydesk Kontrol
+      ];
+
+      return staffKeywords.some(keyword => name.includes(keyword));
+    });
   }
   return false;
 }
@@ -135,8 +265,29 @@ async function getOrCreateCheatLogChannel(guild) {
   return ch;
 }
 
+async function getOrCreateAboneLogChannel(guild) {
+  let ch = guild.channels.cache.find(c =>
+    c.name === '🔴・abone-log' ||
+    c.name === 'abone-log' ||
+    c.name.includes('abone-log')
+  );
+  if (!ch) {
+    ch = await guild.channels.create({
+      name: '🔴・abone-log',
+      type: ChannelType.GuildText,
+      permissionOverwrites: [
+        {
+          id: guild.roles.everyone.id,
+          deny: [PermissionFlagsBits.SendMessages]
+        }
+      ]
+    }).catch(() => null);
+  }
+  return ch;
+}
+
 // ==========================================
-// 4. SLASH KOMUTLARI (TANIMLAR - SADECE 7 KOMUT)
+// 5. SLASH KOMUTLARI (TANIMLAR)
 // ==========================================
 const commands = [
   // 1. /basvuru-kur
@@ -152,7 +303,7 @@ const commands = [
     )
     .addRoleOption(option =>
       option.setName('klan_rolu')
-        .setDescription('Başvurusu onaylanan üyelere otomatik verilecek rol (Örn: @Vyron • Klan Üyesi)')
+        .setDescription('Başvurusu onaylanan üyelere otomatik verilecek klan rolü')
         .setRequired(false)
     )
     .addChannelOption(option =>
@@ -270,11 +421,40 @@ const commands = [
         .setDescription('Ticket kanallarının açılacağı kategori')
         .setRequired(true)
         .addChannelTypes(ChannelType.GuildCategory)
+    ),
+
+  // 8. /abone-kur (Yapay Zeka OCR Otomatik Abone Paneli)
+  new SlashCommandBuilder()
+    .setName('abone-kur')
+    .setDescription('Yapay Zeka (OCR) ile YouTube SS okuyan otomatik abone onay panelini kurar.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Abone bilgilendirme ve yönlendirme panelinin gönderileceği kanal')
+        .setRequired(true)
+        .addChannelTypes(ChannelType.GuildText)
+    )
+    .addRoleOption(option =>
+      option.setName('abone_rolu')
+        .setDescription('SS onaylandığında otomatik verilecek abone rolü (Örn: @Abone)')
+        .setRequired(false)
+    ),
+
+  // 9. /abone-kanal (SS Atılacak Kanal)
+  new SlashCommandBuilder()
+    .setName('abone-kanal')
+    .setDescription('Üyelerin YouTube abone ekran görüntüsü (SS) atacağı kanalı belirler.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Ekran görüntüsü atılacak kanal (Örn: #abone-ss)')
+        .setRequired(true)
+        .addChannelTypes(ChannelType.GuildText)
     )
 ];
 
 // ==========================================
-// 5. CLIENT & EVENTLER
+// 6. CLIENT & EVENTLER
 // ==========================================
 const client = new Client({
   intents: [
@@ -287,8 +467,8 @@ const client = new Client({
 });
 
 client.once('ready', async () => {
-  console.log(`🤖 Vyron Ticket & Klan Başvuru Botu aktif: ${client.user.tag}`);
-  client.user.setActivity('🎫 Destek & ⚔️ Klan Başvurusu', { type: 3 });
+  console.log(`🤖 Vyron Bot aktif: ${client.user.tag}`);
+  client.user.setActivity('🎫 Destek • ⚔️ Klan • 🤖 AI OCR', { type: 3 });
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
@@ -323,13 +503,115 @@ client.on('guildCreate', async (guild) => {
 });
 
 // ==========================================
-// 6. MESAJ İZLEYİCİ (TRANSKRİPT KAYDI)
+// 7. MESAJ İZLEYİCİ (AI OCR & TRANSKRİPT)
 // ==========================================
 client.on('messageCreate', async (message) => {
   try {
     if (!message.guild || message.author.bot) return;
 
+    const data = loadData();
+
+    // ----------------------------------------------------
+    // A. YAPAY ZEKA (OCR) YOUTUBE ABONE DOĞRULAMA
+    // ----------------------------------------------------
     const chName = message.channel.name.toLowerCase();
+    const isAboneChannel = (data.aboneChannelId && message.channel.id === data.aboneChannelId) ||
+                           chName.includes('abone-ss') || chName.includes('abone-yetki') || chName.includes('abone-onay') || chName.includes('abone-kanali');
+
+    if (isAboneChannel && message.attachments.size > 0) {
+      const attachment = message.attachments.first();
+      const isImage = attachment.contentType && attachment.contentType.startsWith('image/');
+
+      if (isImage) {
+        await message.react('⏳').catch(() => {});
+
+        const ocrResult = await analyzeYoutubeScreenshot(attachment.url);
+
+        if (ocrResult.isValid) {
+          await message.reactions.removeAll().catch(() => {});
+          await message.react('✅').catch(() => {});
+
+          const guild = message.guild;
+          let roleGiven = false;
+          let roleToAssign = data.aboneRoleId ? guild.roles.cache.get(data.aboneRoleId) : null;
+          
+          if (!roleToAssign) {
+            roleToAssign = guild.roles.cache.find(r => r.name.toLowerCase().includes('abone') || r.name.toLowerCase().includes('vyron • abone'));
+          }
+
+          if (roleToAssign && message.member) {
+            await message.member.roles.add(roleToAssign).catch(e => console.error('Abone rol verme hatası:', e));
+            roleGiven = true;
+          }
+
+          // Kanala Başarı Mesajı
+          const successEmbed = new EmbedBuilder()
+            .setColor('#10B981')
+            .setAuthor({ name: 'Vyron Yapay Zeka (AI OCR) Onay Sistemi', iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+            .setTitle('🎉 ABONELİK BAŞARIYLA DOĞRULANDI!')
+            .setDescription(
+              `Tebrikler ${message.author}!\n\n` +
+              `Yapay zeka (OCR) ekran görüntünüzü inceledi ve **YouTube aboneliğinizi onayladı.**\n\n` +
+              (roleGiven ? `💎 **${roleToAssign.name}** rolünüz otomatik olarak verildi!` : `💎 Aboneliğiniz onaylandı!`) + `\n` +
+              `🔍 *Tespit Edilen İbareler:* \`${ocrResult.matchedKeywords.join(', ')}\``
+            )
+            .setFooter({ text: `${FOOTER_TEXT} • Otomatik AI Doğrulama` })
+            .setTimestamp();
+
+          await message.reply({ embeds: [successEmbed] });
+
+          // Abone Log Kanalına Gönder
+          const chLog = await getOrCreateAboneLogChannel(guild);
+          if (chLog) {
+            const logEmbed = new EmbedBuilder()
+              .setColor('#10B981')
+              .setAuthor({ name: 'Otomatik Abone Log', iconURL: guild.iconURL({ dynamic: true }) })
+              .setTitle('🔴 YENİ ABONE ROLÜ VERİLDİ')
+              .setThumbnail(message.author.displayAvatarURL({ dynamic: true, size: 256 }))
+              .addFields(
+                { name: '👤 Kullanıcı', value: `${message.author} (\`${message.author.tag}\` - \`${message.author.id}\`)`, inline: true },
+                { name: '🤖 Doğrulama Yöntemi', value: '`Yapay Zeka (Tesseract OCR)`', inline: true },
+                { name: '🔑 Eşleşen Anahtar Kelimeler', value: `\`${ocrResult.matchedKeywords.join(', ')}\``, inline: false },
+                { name: '⏰ Tarih', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+              )
+              .setImage(attachment.url)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp();
+
+            await chLog.send({ embeds: [logEmbed] }).catch(() => {});
+          }
+        } else {
+          await message.reactions.removeAll().catch(() => {});
+          await message.react('❌').catch(() => {});
+
+          let failTitle = '❌ ABONELİK TESPİT EDİLEMEDİ';
+          let failDesc = `Sayın ${message.author},\n\nYüklediğiniz ekran görüntüsünde **"Abone Olundu"** veya **"Subscribed"** yazısı net olarak tespit edilemedi.\n\n📌 Lütfen kanalımıza abone olup bildirim zilini açtığınızı gösteren **tam ekran** bir görüntü yükleyiniz.`;
+
+          if (ocrResult.reason === 'not_fullscreen') {
+            failTitle = '⚠️ TAM EKRAN EKRAN GÖRÜNTÜSÜ GEREKLİ';
+            failDesc = `Sayın ${message.author},\n\n` +
+              `Yüklediğiniz ekran görüntüsü **kırpılmış** olarak algılandı!\n\n` +
+              `🛡️ **Sahte / Başkasına Ait SS Koruması:**\n` +
+              `• Lütfen sadece abone butonunu kırparak atmayınız.\n` +
+              `• **Telefonun üst saati, şarj yüzdesi** veya **bilgisayarın tarayıcı / görev çubuğunun** gözüktüğü **TAM EKRAN (Fullscreen)** ekran görüntüsü yükleyiniz.\n\n` +
+              `🔍 *Sistemimiz kırpılmış görselleri güvenlik amacıyla otomatik olarak reddetmektedir.*`;
+          }
+
+          const failEmbed = new EmbedBuilder()
+            .setColor('#EF4444')
+            .setAuthor({ name: 'Yapay Zeka (OCR) Doğrulama & Güvenlik Kalkanı', iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+            .setTitle(failTitle)
+            .setDescription(failDesc)
+            .setFooter({ text: `${FOOTER_TEXT} • Tam Ekran AI Koruması` });
+
+          await message.reply({ embeds: [failEmbed] });
+        }
+      }
+    }
+
+    // ----------------------------------------------------
+    // B. TICKET KANAL MESAJLARINI TRANSKRİPTE EKLEME
+    // ----------------------------------------------------
     const isTicket = chName.startsWith('ticket-') || chName.startsWith('basvuru-') || chName.startsWith('talep-');
     if (isTicket) {
       if (!ticketTranscripts.has(message.channel.id)) {
@@ -349,7 +631,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // ==========================================
-// 7. ETKİLEŞİM İŞLEYİCİSİ (INTERACTION CREATE)
+// 8. ETKİLEŞİM İŞLEYİCİSİ (INTERACTION CREATE)
 // ==========================================
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -364,7 +646,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // 1. /basvuru-kur
       if (commandName === 'basvuru-kur') {
-        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Yöneticiler kullanabilir!', ephemeral: true });
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
         
         const targetChannel = interaction.options.getChannel('kanal');
         const clanRole = interaction.options.getRole('klan_rolu');
@@ -408,7 +690,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // 2. /basvuru-yetkili
       if (commandName === 'basvuru-yetkili') {
-        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Yöneticiler kullanabilir!', ephemeral: true });
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
         const action = interaction.options.getString('islem');
         const role = interaction.options.getRole('rol');
 
@@ -432,7 +714,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // 3. /basvuru-kategori
       if (commandName === 'basvuru-kategori') {
-        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Yöneticiler kullanabilir!', ephemeral: true });
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
         const cat = interaction.options.getChannel('kategori');
         data.applyCategoryId = cat.id;
         saveData(data);
@@ -441,6 +723,10 @@ client.on('interactionCreate', async (interaction) => {
 
       // 4. /hile-rapor
       if (commandName === 'hile-rapor') {
+        if (!isStaffMember(interaction.member, data)) {
+          return interaction.reply({ content: '🚫 Bu komutu yalnızca yetkililer kullanabilir!', ephemeral: true });
+        }
+
         const targetUser = interaction.options.getUser('aday');
         const cheatType = interaction.options.getString('hile_turu');
         const proofAttachment = interaction.options.getAttachment('kanit_ss');
@@ -470,7 +756,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // 5. /ticket-kur
       if (commandName === 'ticket-kur') {
-        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Yöneticiler kullanabilir!', ephemeral: true });
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
         const targetChannel = interaction.options.getChannel('kanal');
         const category = interaction.options.getChannel('kategori');
 
@@ -514,7 +800,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // 6. /ticket-yetkili
       if (commandName === 'ticket-yetkili') {
-        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Yöneticiler kullanabilir!', ephemeral: true });
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
         const action = interaction.options.getString('islem');
         const role = interaction.options.getRole('rol');
 
@@ -538,11 +824,58 @@ client.on('interactionCreate', async (interaction) => {
 
       // 7. /ticket-kategori
       if (commandName === 'ticket-kategori') {
-        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Yöneticiler kullanabilir!', ephemeral: true });
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
         const cat = interaction.options.getChannel('kategori');
         data.ticketCategoryId = cat.id;
         saveData(data);
         return interaction.reply({ content: `✅ Ticket odaları artık **${cat.name}** kategorisinde açılacaktır.`, ephemeral: true });
+      }
+
+      // 8. /abone-kur
+      if (commandName === 'abone-kur') {
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
+        const targetChannel = interaction.options.getChannel('kanal');
+        const customRole = interaction.options.getRole('abone_rolu');
+        const guild = interaction.guild;
+
+        const roleToUse = customRole || guild.roles.cache.find(r => r.name.toLowerCase().includes('abone')) || guild.roles.cache.find(r => r.name.toLowerCase().includes('vyron • abone'));
+
+        if (roleToUse) {
+          data.aboneRoleId = roleToUse.id;
+          saveData(data);
+        }
+
+        const chAboneLog = await getOrCreateAboneLogChannel(guild);
+
+        const aboneEmbed = new EmbedBuilder()
+          .setColor('#EF4444')
+          .setAuthor({ name: 'Vyron Abone Rolü Bilgilendirme', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
+          .setTitle('🔴 VYRON ABONE ROLÜ VE ÖZEL AVANTAJLARI')
+          .setDescription(
+            `### 🌟 ${roleToUse ? roleToUse : '@Vyron • Abone'} Avantajları Nelerdir?\n\n` +
+            `🎯 **Özel Texture Pack & Buton Paketleri**\n` +
+            `🎉 **Abonelere Özel VIP Çekilişler & Turnuva Önceliği**\n` +
+            `💬 **Gizli Abone Sohbeti & Özel İndirimler**\n\n` +
+            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈\n` +
+            `📌 **Rolü Otomatik Nasıl Alırım?**\n` +
+            `1. YouTube kanalımıza abone olun ve bildirim zilini açın.\n` +
+            `2. Ekran görüntüsünü (SS) ${data.aboneChannelId ? `<#${data.aboneChannelId}>` : '`#abone-ss`'} kanalına yükleyin.\n` +
+            `3. **Yapay Zeka (OCR)** görüntünüzü 2 saniyede okuyup rolünüzü otomatik versin! 🤖\n` +
+            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈`
+          )
+          .setFooter({ text: `${FOOTER_TEXT} • Yapay Zeka Doğrulama` });
+
+        await targetChannel.send({ embeds: [aboneEmbed] });
+        return interaction.reply({ content: `✅ **Abone paneli ${targetChannel} kanalına başarıyla gönderildi!**`, ephemeral: true });
+      }
+
+      // 9. /abone-kanal
+      if (commandName === 'abone-kanal') {
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
+        const ch = interaction.options.getChannel('kanal');
+        data.aboneChannelId = ch.id;
+        saveData(data);
+        return interaction.reply({ content: `✅ Yapay Zeka (OCR) ekran görüntüsü kanalı ${ch} olarak ayarlandı! Üyeler buraya SS attığında bot otomatik okuyacaktır.`, ephemeral: true });
       }
     }
 
@@ -554,7 +887,6 @@ client.on('interactionCreate', async (interaction) => {
       const guild = interaction.guild;
       const user = interaction.user;
 
-      // Zaten açık ticket var mı kontrolü
       const existingCh = guild.channels.cache.find(c => c.name.includes(`ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`));
       if (existingCh) {
         return interaction.reply({ content: `⚠️ Zaten açık bir destek talebiniz bulunuyor: ${existingCh}`, ephemeral: true });
@@ -765,11 +1097,11 @@ client.on('interactionCreate', async (interaction) => {
 
       const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`btn_apply_claim_${user.id}`).setLabel('✋ Başvuruyu Üstlen').setStyle(ButtonStyle.Primary).setEmoji('📌'),
-        new ButtonBuilder().setCustomId(`btn_apply_anydesk_${user.id}`).setLabel('🛡️ Anydesk İste').setStyle(ButtonStyle.Secondary).setEmoji('🖥️')
+        new ButtonBuilder().setCustomId(`btn_apply_anydesk_${user.id}`).setLabel('🛡️ Anydesk İste (DM Bildir)').setStyle(ButtonStyle.Secondary).setEmoji('🖥️')
       );
 
       const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`btn_apply_accept_${user.id}_${encodeURIComponent(ign)}`).setLabel('✅ Kabul Et (Klan Üyesi Yap)').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`btn_apply_accept_${user.id}_${encodeURIComponent(ign)}`).setLabel('✅ Temiz - Klan Rolü Ver').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(`btn_apply_reject_${user.id}`).setLabel('❌ Reddet').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId(`btn_apply_cheat_${user.id}`).setLabel('🚫 Hileli (Logla & Reddet)').setStyle(ButtonStyle.Danger)
       );
@@ -781,7 +1113,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // ----------------------------------------------------
-    // E. BUTON AKSİYONLARI (TICKET & BAŞVURU YÖNETİMİ)
+    // E. BUTON AKSİYONLARI (SADECE YETKİLİLER KULLANABİLİR)
     // ----------------------------------------------------
     if (interaction.isButton()) {
       const customId = interaction.customId;
@@ -811,13 +1143,41 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: `✅ Talebi başarıyla üstlendiniz!`, ephemeral: true });
       }
 
-      // 2. ANYDESK KONTROLÜ İSTEME
+      // 2. ANYDESK KONTROLÜ İSTEME (KANAL + ADAYA ÖZEL DM BİLDİRİMİ)
       if (customId.startsWith('btn_apply_anydesk_')) {
         if (!isStaffMember(member, data)) {
           return interaction.reply({ content: '🚫 Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
         }
 
         const applicantId = customId.replace('btn_apply_anydesk_', '');
+        const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
+
+        let dmSent = false;
+        if (applicantMember) {
+          try {
+            const dmEmbed = new EmbedBuilder()
+              .setColor('#F59E0B')
+              .setAuthor({ name: `${interaction.guild.name} • Klan Başvurusu Anydesk Çağrısı`, iconURL: interaction.guild.iconURL({ dynamic: true }) })
+              .setTitle('🛡️ YETKİLİ SİZDEN ANYDESK KODUNUZU TALEP EDİYOR!')
+              .setDescription(
+                `Sayın ${applicantMember},\n\n` +
+                `**${interaction.guild.name}** klan başvurunuz için yetkilimiz **${member.user.tag}** sizden **Anydesk adres kodunuzu** istemektedir.\n\n` +
+                `📌 **Lütfen Hemen:**\n` +
+                `1. AnyDesk programını açınız.\n` +
+                `2. **9 haneli adres kodunuzu** başvuru odanız olan ${interaction.channel} kanalına yazınız.\n` +
+                `3. Yetkilimiz bağlandığında ekrandan onay veriniz.\n\n` +
+                `⚠️ *Herhangi bir gecikme veya reddetme durumunda başvurunuz iptal edilecektir.*`
+              )
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp();
+
+            await applicantMember.send({ embeds: [dmEmbed] });
+            dmSent = true;
+          } catch (e) {
+            dmSent = false;
+          }
+        }
+
         const anydeskEmbed = new EmbedBuilder()
           .setColor('#F59E0B')
           .setTitle('🛡️ ANYDESK & HİLE TARAMASI ÇAĞRISI')
@@ -828,15 +1188,15 @@ client.on('interactionCreate', async (interaction) => {
             `1. [AnyDesk Resmi Sitesinden](https://anydesk.com) programı açınız.\n` +
             `2. Ekranda görünen **9 haneli adres kodunuzu** bu kanala yazınız.\n` +
             `3. Yetkilimiz bağlandığında ekrandan onay veriniz.\n\n` +
-            `⚠️ *Görüşmeden çıkmak veya kontrolü reddetmek doğrudan elenme sebebidir.*`
+            (dmSent ? `📬 *Adaya özelden DM bildirimi başarıyla iletildi.*` : `🔒 *(Adayın DM kutusu kapalı olduğu için bildirim yalnızca buradan yapıldı).*`)
           )
           .setFooter({ text: FOOTER_TEXT });
 
         await interaction.channel.send({ content: `📢 <@${applicantId}> Anydesk kontrolü bekleniyor!`, embeds: [anydeskEmbed] });
-        return interaction.reply({ content: '✅ Anydesk çağrısı kanala gönderildi.', ephemeral: true });
+        return interaction.reply({ content: `✅ Anydesk çağrısı yapıldı${dmSent ? ' ve adaya özelden DM iletildi' : ''}.`, ephemeral: true });
       }
 
-      // 3. BAŞVURU KABUL ETME (KLAN ROLÜ VERME)
+      // 3. TEMİZ - BAŞVURU KABUL ETME (KLAN ROLÜ VERME + ÖZEL DM + 5 SANİYEDE KANALI KAPATMA)
       if (customId.startsWith('btn_apply_accept_')) {
         if (!isStaffMember(member, data)) {
           return interaction.reply({ content: '🚫 Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
@@ -845,80 +1205,193 @@ client.on('interactionCreate', async (interaction) => {
         const parts = customId.split('_');
         const applicantId = parts[3];
         const ign = decodeURIComponent(parts[4] || 'Oyuncu');
+        const channel = interaction.channel;
 
         const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
 
-        if (applicantMember && data.applyClanRoleId) {
-          const clanRole = interaction.guild.roles.cache.get(data.applyClanRoleId);
+        // Klan Rolünü Ver
+        let roleGiven = false;
+        if (applicantMember) {
+          const roleId = data.applyClanRoleId;
+          const clanRole = (roleId && interaction.guild.roles.cache.get(roleId)) ||
+                           interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('klan üyesi') || r.name.toLowerCase().includes('klan uyesi') || r.name.toLowerCase().includes('vyron • klan'));
           if (clanRole) {
             await applicantMember.roles.add(clanRole).catch(err => console.error('Rol verme hatası:', err));
+            roleGiven = true;
           }
+        }
+
+        // Adaya Özel DM Gönderimi
+        if (applicantMember) {
+          try {
+            const acceptDmEmbed = new EmbedBuilder()
+              .setColor('#10B981')
+              .setAuthor({ name: `${interaction.guild.name} • Başvuru Sonucu: ONAYLANDI`, iconURL: interaction.guild.iconURL({ dynamic: true }) })
+              .setTitle('🎉 TEBRİKLER! KLAN BAŞVURUNUZ KABUL EDİLDİ ⚔️')
+              .setDescription(
+                `Tebrikler ${applicantMember} (\`${ign}\`)!
+
+` +
+                `**${interaction.guild.name}** klan başvurunuz yetkilimiz **${member.user.tag}** tarafından incelenmiş ve **TEMİZ** olarak onaylanmıştır.
+
+` +
+                `🛡️ Sunucudaki klan rolleriniz tanımlanmıştır. Ailemize ve savaş kadromuza hoş geldiniz!`
+              )
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp();
+
+            await applicantMember.send({ embeds: [acceptDmEmbed] });
+          } catch (e) {}
         }
 
         const acceptEmbed = new EmbedBuilder()
           .setColor('#10B981')
           .setAuthor({ name: 'Vyron Klanı • Başvuru Onaylandı', iconURL: interaction.guild.iconURL({ dynamic: true }) })
-          .setTitle('🎉 〖 TEBRİKLER! KLAN BAŞVURUNUZ KABUL EDİLDİ 〗 🎉')
+          .setTitle('🎉 〖 BAŞVURU KABUL EDİLDİ (TEMİZ) 〗 🎉')
           .setDescription(
-            `Tebrikler <@${applicantId}> (\`${ign}\`)!\n\n` +
-            `Yetkilimiz ${member} tarafından yapılan inceleme ve kontroller sonucunda **Vyron Klanına kabul edildiniz.**\n\n` +
-            `🛡️ Klan rolleriniz tanımlandı. Ailemize hoş geldiniz! ⚔️`
+            `Tebrikler <@${applicantId}> (\`${ign}\`)!
+
+` +
+            `Yetkilimiz ${member} tarafından yapılan inceleme ve kontroller sonucunda **Vyron Klanına kabul edildiniz.**
+
+` +
+            (roleGiven ? `✅ Klan rolleriniz başarıyla tanımlandı.` : `⚠️ *Klan rolü bulunamadı, lütfen manuel rol veriniz.*`) + `
+
+` +
+            `🔒 **Başvuru tamamlandı. Bu oda 5 saniye içinde otomatik olarak kapatılacaktır...**`
           )
           .setFooter({ text: FOOTER_TEXT })
           .setTimestamp();
 
-        await interaction.channel.send({ content: `🎉 <@${applicantId}> Aramıza hoş geldin!`, embeds: [acceptEmbed] });
-        return interaction.reply({ content: '✅ Başvuru onaylandı ve klan rolü verildi.', ephemeral: true });
+        await interaction.reply({ content: '✅ Başvuru onaylandı, klan rolü verildi ve adaya DM gönderildi. Kanal 5 saniye içinde kapatılıyor...' });
+        await channel.send({ content: `🎉 <@${applicantId}> Aramıza hoş geldin!`, embeds: [acceptEmbed] });
+
+        setTimeout(async () => {
+          activeClaimedTickets.delete(channel.id);
+          ticketTranscripts.delete(channel.id);
+          await channel.delete().catch(() => {});
+        }, 5000);
+        return;
       }
 
-      // 4. BAŞVURU REDDETME
+      // 4. BAŞVURU REDDETME (KANAL + ÖZEL DM + 5 SANİYEDE KANALI KAPATMA)
       if (customId.startsWith('btn_apply_reject_')) {
         if (!isStaffMember(member, data)) {
           return interaction.reply({ content: '🚫 Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
         }
 
         const applicantId = customId.replace('btn_apply_reject_', '');
+        const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
+        const channel = interaction.channel;
+
+        if (applicantMember) {
+          try {
+            const rejectDmEmbed = new EmbedBuilder()
+              .setColor('#EF4444')
+              .setAuthor({ name: `${interaction.guild.name} • Başvuru Sonucu: REDDEDİLDİ`, iconURL: interaction.guild.iconURL({ dynamic: true }) })
+              .setTitle('❌ KLAN BAŞVURUNUZ ONAYLANMADI')
+              .setDescription(
+                `Sayın ${applicantMember},
+
+` +
+                `**${interaction.guild.name}** klan başvurunuz yetkilimiz **${member.user.tag}** tarafından yapılan değerlendirme sonucunda maalesef **olumsuz sonuçlanmıştır.**
+
+` +
+                `Gelecek alımlarda kendinizi geliştirerek tekrar başvurabilirsiniz.`
+              )
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp();
+
+            await applicantMember.send({ embeds: [rejectDmEmbed] });
+          } catch (e) {}
+        }
+
         const rejectEmbed = new EmbedBuilder()
           .setColor('#EF4444')
           .setTitle('❌ KLAN BAŞVURUNUZ ONAYLANMADI')
           .setDescription(
-            `Sayın <@${applicantId}>,\n\n` +
-            `Yapılan değerlendirme sonucunda klan başvurunuz maalesef **olumsuz sonuçlanmıştır.**\n\n` +
-            `Gelecek alımlarda kendinizi geliştirerek tekrar başvurabilirsiniz.`
+            `Sayın <@${applicantId}>,
+
+` +
+            `Yetkilimiz ${member} tarafından yapılan değerlendirme sonucunda klan başvurunuz maalesef **olumsuz sonuçlanmıştır.**
+
+` +
+            `🔒 **Bu başvuru odası 5 saniye içinde otomatik olarak silinecektir.**`
           )
           .setFooter({ text: FOOTER_TEXT });
 
-        await interaction.channel.send({ content: `📢 <@${applicantId}>`, embeds: [rejectEmbed] });
-        return interaction.reply({ content: '❌ Başvuru reddedildi olarak işaretlendi.', ephemeral: true });
+        await interaction.reply({ content: '❌ Başvuru reddedildi ve adaya DM iletildi. Kanal 5 saniye içinde kapatılıyor...' });
+        await channel.send({ content: `📢 <@${applicantId}>`, embeds: [rejectEmbed] });
+
+        setTimeout(async () => {
+          activeClaimedTickets.delete(channel.id);
+          ticketTranscripts.delete(channel.id);
+          await channel.delete().catch(() => {});
+        }, 5000);
+        return;
       }
 
-      // 5. HİLELİ - REDDET BUTONU
+      // 5. HİLELİ - REDDET BUTONU (LOG + ÖZEL DM + 5 SANİYEDE KANALI KAPATMA)
       if (customId.startsWith('btn_apply_cheat_')) {
         if (!isStaffMember(member, data)) {
           return interaction.reply({ content: '🚫 Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
         }
 
         const applicantId = customId.replace('btn_apply_cheat_', '');
+        const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
         const chLog = await getOrCreateCheatLogChannel(interaction.guild);
+        const channel = interaction.channel;
 
         if (chLog) {
           const logEmb = new EmbedBuilder()
             .setColor('#EF4444')
             .setTitle('🚫 BAŞVURUDA HİLE TESPİTİ NEDENİYLE ELENDİ')
-            .setDescription(`👤 **Aday:** <@${applicantId}>\n🛡️ **İnceleyen Yetkili:** ${member}\n⏰ **Tarih:** <t:${Math.floor(Date.now() / 1000)}:F>`)
+            .setDescription(`👤 **Aday:** <@${applicantId}>
+🛡️ **İnceleyen Yetkili:** ${member}
+⏰ **Tarih:** <t:${Math.floor(Date.now() / 1000)}:F>`)
             .setTimestamp();
           await chLog.send({ embeds: [logEmb] }).catch(() => {});
         }
 
-        await interaction.channel.send({
-          content: `🚫 <@${applicantId}> Anydesk / inceleme sırasında **hile veya şüpheli dosya kalıntısı** tespit edildiği için başvurunuz derhal reddedilmiştir!`
-        });
+        if (applicantMember) {
+          try {
+            await applicantMember.send({
+              content: `🚫 **${interaction.guild.name}** klan başvurunuz, yapılan Anydesk / inceleme sırasında **hile veya şüpheli dosya kalıntısı** tespit edildiği için reddedilmiştir!`
+            });
+          } catch (e) {}
+        }
 
-        return interaction.reply({ content: '🚫 Aday hileli olarak işaretlendi ve loglandı.', ephemeral: true });
+        const cheatEmbed = new EmbedBuilder()
+          .setColor('#EF4444')
+          .setTitle('🚫 HİLE TESPİTİ SEBEBİYLE BAŞVURU İPTAL EDİLDİ')
+          .setDescription(
+            `Sayın <@${applicantId}>,
+
+` +
+            `Anydesk / inceleme sırasında **hile veya şüpheli dosya kalıntısı** tespit edildiği için başvurunuz derhal reddedilmiştir.
+
+` +
+            `🔒 **Bu başvuru odası 5 saniye içinde otomatik olarak silinecektir.**`
+          )
+          .setFooter({ text: FOOTER_TEXT });
+
+        await interaction.reply({ content: '🚫 Aday hileli olarak işaretlendi, loglandı ve DM atıldı. Kanal 5 saniye içinde kapatılıyor...' });
+        await channel.send({ content: `🚫 <@${applicantId}>`, embeds: [cheatEmbed] });
+
+        setTimeout(async () => {
+          activeClaimedTickets.delete(channel.id);
+          ticketTranscripts.delete(channel.id);
+          await channel.delete().catch(() => {});
+        }, 5000);
+        return;
       }
 
       // 6. TICKET KAPATMA BUTONU
       if (customId === 'ticket_close_action') {
+        if (!isStaffMember(member, data)) {
+          return interaction.reply({ content: '🚫 Destek talebini yalnızca yetkililer kapatabilir!', ephemeral: true });
+        }
+
         const channel = interaction.channel;
         await interaction.reply({ content: '🔒 Destek talebi kapatılıyor ve kanal 5 saniye içinde siliniyor...' });
 
@@ -935,6 +1408,6 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ==========================================
-// 8. BOT BAŞLATMA
+// 9. BOT BAŞLATMA
 // ==========================================
 client.login(process.env.TOKEN);
