@@ -3,9 +3,10 @@
  * ⚔️ VYRON TICKET, KLAN BAŞVURU & YAPAY ZEKA (OCR) ABONE DOĞRULAMA BOTU
  * ============================================================================
  * İÇERDİĞİ SİSTEMLER:
- * 1. ⚔️ Anydesk Onaylı Klan Başvuru Sistemi (Form + Özel Oda + DM Bildirimleri)
+ * 1. ⚔️ Anydesk Onaylı Klan Başvuru Sistemi (Form + Özel Oda + DM Bildirimleri + Otomatik Kapatma)
  * 2. 🎫 Kategorili Destek (Ticket) Sistemi (Açılır Menü + Özel Oda + Kapatma)
- * 3. 🤖 Yapay Zeka (Tesseract OCR) YouTube Abone SS Otomatik Doğrulama Motoru
+ * 3. 🤖 Yapay Zeka (Tesseract OCR) 2 Kanal & Tam Ekran Zorunlu YouTube Abone Doğrulama
+ * 4. 🔊 Toplu Ses Odası Taşıma & Çekme (/ses-tasi)
  * 
  * 🔒 Moderasyon, Ceza veya Tehlikeli Roller İÇERMEZ. %100 Güvenlidir.
  * ============================================================================
@@ -71,7 +72,8 @@ function loadData() {
         applyClanRoleId: parsed.applyClanRoleId || null,
         aboneChannelId: parsed.aboneChannelId || null,
         aboneRoleId: parsed.aboneRoleId || null,
-        aboneLogChannelId: parsed.aboneLogChannelId || null
+        aboneLogChannelId: parsed.aboneLogChannelId || null,
+        userSubscribedChannels: parsed.userSubscribedChannels || {}
       };
     }
   } catch (err) {
@@ -85,7 +87,8 @@ function loadData() {
     applyClanRoleId: null,
     aboneChannelId: null,
     aboneRoleId: null,
-    aboneLogChannelId: null
+    aboneLogChannelId: null,
+    userSubscribedChannels: {}
   };
 }
 
@@ -102,7 +105,7 @@ const activeClaimedTickets = new Map(); // channelId -> { claimedBy, claimedAt }
 const ticketTranscripts = new Map();     // channelId -> Array<{ author, content, timestamp }>
 
 // ==========================================
-// 3. YAPAY ZEKA (OCR) MOTORU
+// 3. YAPAY ZEKA (OCR) MOTORU (2 KANAL & TAM EKRAN ZORUNLU)
 // ==========================================
 async function analyzeYoutubeScreenshot(imageUrl) {
   try {
@@ -136,11 +139,9 @@ async function analyzeYoutubeScreenshot(imageUrl) {
       'subscribers', 'abonniert', 'abonne', 'suscrito', 'bildirim', 'bildirimler',
       'zil', 'tumu', 'tum bildirimler', 'all notifications'
     ];
-    const matchedSub = subKeywords.filter(k => cleanText.includes(k));
-    const hasSub = matchedSub.length > 0;
+    const hasSub = subKeywords.some(k => cleanText.includes(k));
 
     // 2. TAM EKRAN / ARAYÜZ (FULLSCREEN) KONTROLÜ
-    // Sahte/kırpılmış küçük butonları engellemek için ekran arayüzü tespiti
     const uiKeywords = [
       'shorts', 'abonelikler', 'kitaplik', 'ana sayfa', 'home', 'subscriptions',
       'library', 'you', 'youtube', 'video', 'videolar', 'oynatma', 'begen',
@@ -154,22 +155,30 @@ async function analyzeYoutubeScreenshot(imageUrl) {
     const timeMatch = cleanText.match(/\b\d{1,2}[:.]\d{2}\b/);
     const hasTimeOrBattery = timeMatch !== null || cleanText.includes('%') || cleanText.includes('4g') || cleanText.includes('5g') || cleanText.includes('lte') || cleanText.includes('wifi');
 
-    // Tam ekran skoru
     const isFullScreen = (matchedUI.length >= 2) || (hasTimeOrBattery && matchedUI.length >= 1) || matchedUI.length >= 3;
 
-    // 3. HEDEF KANAL TESPİTİ (Birim Fonksiyon / Frozzeq / Vyron)
-    const targetChannels = [
-      'birim', 'birimfonksiyon', 'birimfonksiyons', 'froz', 'frozzeq', 'xfrozzeq', 'vyron'
-    ];
-    const matchedChannels = targetChannels.filter(c => cleanText.includes(c));
+    // 3. HEDEF KANAL KONTROLÜ (1. Kanal: @birimfonksiyons / 2. Kanal: @xFrozzeq)
+    const isBirimChannel = cleanText.includes('birimfonksiyons') ||
+                           cleanText.includes('birimfonksiyon') ||
+                           cleanText.includes('birim') ||
+                           cleanText.includes('fonksiyon');
 
-    // Nihai Doğrulama
+    const isFrozChannel = cleanText.includes('xfrozzeq') ||
+                          cleanText.includes('frozzeq') ||
+                          cleanText.includes('froz') ||
+                          cleanText.includes('sarsilmaz');
+
+    const isVyronChannel = cleanText.includes('vyron');
+
+    const detectedBirim = isBirimChannel || isVyronChannel;
+    const detectedFroz = isFrozChannel;
+
+    // Doğrulama Kontrolleri
     if (!hasSub) {
       return {
         isValid: false,
         reason: 'sub_not_found',
-        message: 'Görselde "Abone Olundu" veya "Subscribed" yazısı tespit edilemedi.',
-        rawText: rawText.substring(0, 300)
+        message: 'Görselde "Abone Olundu" veya "Subscribed" yazısı tespit edilemedi.'
       };
     }
 
@@ -177,18 +186,23 @@ async function analyzeYoutubeScreenshot(imageUrl) {
       return {
         isValid: false,
         reason: 'not_fullscreen',
-        message: 'Yüklediğiniz görsel kırpılmış görünüyor! Lütfen saat, şarj veya tarayıcı çubuğunun gözüktüğü TAM EKRAN ekran görüntüsü yükleyiniz.',
-        rawText: rawText.substring(0, 300)
+        message: 'Yüklediğiniz görsel kırpılmış görünüyor! Lütfen saat, şarj veya tarayıcı çubuğunun gözüktüğü TAM EKRAN ekran görüntüsü yükleyiniz.'
+      };
+    }
+
+    if (!detectedBirim && !detectedFroz) {
+      return {
+        isValid: false,
+        reason: 'wrong_channel',
+        message: 'Bu ekran görüntüsü @birimfonksiyons veya @xFrozzeq kanallarımıza ait değil!'
       };
     }
 
     return {
       isValid: true,
-      matchedKeywords: matchedSub,
-      matchedChannels,
-      isFullScreen: true,
-      hasTimeOrBattery: !!hasTimeOrBattery,
-      rawText: rawText.substring(0, 300)
+      detectedBirim,
+      detectedFroz,
+      isFullScreen: true
     };
   } catch (error) {
     console.error('OCR Analiz Hatası:', error);
@@ -450,6 +464,24 @@ const commands = [
         .setDescription('Ekran görüntüsü atılacak kanal (Örn: #abone-ss)')
         .setRequired(true)
         .addChannelTypes(ChannelType.GuildText)
+    ),
+
+  // 10. /ses-tasi (Toplu Ses Taşıma & Çekme)
+  new SlashCommandBuilder()
+    .setName('ses-tasi')
+    .setDescription('Bir ses odasındaki tüm üyeleri topluca başka bir ses odasına taşır veya çeker.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.MoveMembers)
+    .addChannelOption(option =>
+      option.setName('kaynak_kanal')
+        .setDescription('İçindeki üyelerin taşınacağı ses odası')
+        .setRequired(true)
+        .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+    )
+    .addChannelOption(option =>
+      option.setName('hedef_kanal')
+        .setDescription('Üyelerin aktarılacağı hedef ses odası (Seçilmezse bulunduğunuz odaya çeker)')
+        .setRequired(false)
+        .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
     )
 ];
 
@@ -461,7 +493,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates
   ],
   partials: [Partials.Channel, Partials.Message]
 });
@@ -512,7 +545,7 @@ client.on('messageCreate', async (message) => {
     const data = loadData();
 
     // ----------------------------------------------------
-    // A. YAPAY ZEKA (OCR) YOUTUBE ABONE DOĞRULAMA
+    // A. YAPAY ZEKA (OCR) YOUTUBE ABONE DOĞRULAMA (2 KANAL ZORUNLU)
     // ----------------------------------------------------
     const chName = message.channel.name.toLowerCase();
     const isAboneChannel = (data.aboneChannelId && message.channel.id === data.aboneChannelId) ||
@@ -528,81 +561,129 @@ client.on('messageCreate', async (message) => {
         const ocrResult = await analyzeYoutubeScreenshot(attachment.url);
 
         if (ocrResult.isValid) {
+          const userId = message.author.id;
+          if (!data.userSubscribedChannels) data.userSubscribedChannels = {};
+          if (!data.userSubscribedChannels[userId]) {
+            data.userSubscribedChannels[userId] = { birim: false, froz: false };
+          }
+
+          const userSubs = data.userSubscribedChannels[userId];
+          if (ocrResult.detectedBirim) userSubs.birim = true;
+          if (ocrResult.detectedFroz) userSubs.froz = true;
+          saveData(data);
+
+          const hasBothChannels = userSubs.birim && userSubs.froz;
+
           await message.reactions.removeAll().catch(() => {});
-          await message.react('✅').catch(() => {});
 
-          const guild = message.guild;
-          let roleGiven = false;
-          let roleToAssign = data.aboneRoleId ? guild.roles.cache.get(data.aboneRoleId) : null;
-          
-          if (!roleToAssign) {
-            roleToAssign = guild.roles.cache.find(r => r.name.toLowerCase().includes('abone') || r.name.toLowerCase().includes('vyron • abone'));
-          }
+          if (hasBothChannels) {
+            await message.react('✅').catch(() => {});
 
-          if (roleToAssign && message.member) {
-            await message.member.roles.add(roleToAssign).catch(e => console.error('Abone rol verme hatası:', e));
-            roleGiven = true;
-          }
+            const guild = message.guild;
+            let roleGiven = false;
+            let roleToAssign = data.aboneRoleId ? guild.roles.cache.get(data.aboneRoleId) : null;
+            
+            if (!roleToAssign) {
+              roleToAssign = guild.roles.cache.find(r => r.name.toLowerCase().includes('abone') || r.name.toLowerCase().includes('vyron • abone'));
+            }
 
-          // Kanala Başarı Mesajı
-          const successEmbed = new EmbedBuilder()
-            .setColor('#10B981')
-            .setAuthor({ name: 'Vyron Yapay Zeka (AI OCR) Onay Sistemi', iconURL: message.author.displayAvatarURL({ dynamic: true }) })
-            .setTitle('🎉 ABONELİK BAŞARIYLA DOĞRULANDI!')
-            .setDescription(
-              `Tebrikler ${message.author}!\n\n` +
-              `Yapay zeka (OCR) ekran görüntünüzü inceledi ve **YouTube aboneliğinizi onayladı.**\n\n` +
-              (roleGiven ? `💎 **${roleToAssign.name}** rolünüz otomatik olarak verildi!` : `💎 Aboneliğiniz onaylandı!`) + `\n` +
-              `🔍 *Tespit Edilen İbareler:* \`${ocrResult.matchedKeywords.join(', ')}\``
-            )
-            .setFooter({ text: `${FOOTER_TEXT} • Otomatik AI Doğrulama` })
-            .setTimestamp();
+            if (roleToAssign && message.member) {
+              await message.member.roles.add(roleToAssign).catch(e => console.error('Abone rol verme hatası:', e));
+              roleGiven = true;
+            }
 
-          await message.reply({ embeds: [successEmbed] });
-
-          // Abone Log Kanalına Gönder
-          const chLog = await getOrCreateAboneLogChannel(guild);
-          if (chLog) {
-            const logEmbed = new EmbedBuilder()
+            // Kanala Tam Onay Mesajı
+            const successEmbed = new EmbedBuilder()
               .setColor('#10B981')
-              .setAuthor({ name: 'Otomatik Abone Log', iconURL: guild.iconURL({ dynamic: true }) })
-              .setTitle('🔴 YENİ ABONE ROLÜ VERİLDİ')
-              .setThumbnail(message.author.displayAvatarURL({ dynamic: true, size: 256 }))
-              .addFields(
-                { name: '👤 Kullanıcı', value: `${message.author} (\`${message.author.tag}\` - \`${message.author.id}\`)`, inline: true },
-                { name: '🤖 Doğrulama Yöntemi', value: '`Yapay Zeka (Tesseract OCR)`', inline: true },
-                { name: '🔑 Eşleşen Anahtar Kelimeler', value: `\`${ocrResult.matchedKeywords.join(', ')}\``, inline: false },
-                { name: '⏰ Tarih', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+              .setAuthor({ name: 'Vyron Yapay Zeka (AI OCR) Onay Sistemi', iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+              .setTitle('🎉 2 KANAL ABONELİĞİ DE BAŞARIYLA DOĞRULANDI!')
+              .setDescription(
+                `Tebrikler ${message.author}!\n\n` +
+                `Yapay zeka (OCR) ekran görüntülerinizi inceledi ve **her iki resmi YouTube kanalımıza** olan aboneliğinizi onayladı:\n\n` +
+                `✅ **1. Kanal:** \`@birimfonksiyons\` (Abone Olundu)\n` +
+                `✅ **2. Kanal:** \`@xFrozzeq\` (Abone Olundu)\n\n` +
+                (roleGiven ? `💎 **${roleToAssign.name}** rolünüz otomatik olarak tanımlandı!` : `💎 Abonelikleriniz onaylandı!`) + `\n` +
+                `Ailemize hoş geldiniz! ⚔️`
               )
-              .setImage(attachment.url)
-              .setFooter({ text: FOOTER_TEXT })
+              .setFooter({ text: `${FOOTER_TEXT} • Otomatik AI Doğrulama` })
               .setTimestamp();
 
-            await chLog.send({ embeds: [logEmbed] }).catch(() => {});
+            await message.reply({ embeds: [successEmbed] });
+
+            // Abone Log Kanalına Gönder
+            const chLog = await getOrCreateAboneLogChannel(guild);
+            if (chLog) {
+              const logEmbed = new EmbedBuilder()
+                .setColor('#10B981')
+                .setAuthor({ name: 'Otomatik Abone Log', iconURL: guild.iconURL({ dynamic: true }) })
+                .setTitle('🔴 YENİ ABONE ROLÜ VERİLDİ (2 KANAL TAM)')
+                .setThumbnail(message.author.displayAvatarURL({ dynamic: true, size: 256 }))
+                .addFields(
+                  { name: '👤 Kullanıcı', value: `${message.author} (\`${message.author.tag}\` - \`${message.author.id}\`)`, inline: true },
+                  { name: '🤖 Doğrulama', value: '`2/2 Kanal Tam Ekran OCR Onaylı`', inline: true },
+                  { name: '⏰ Tarih', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+                )
+                .setImage(attachment.url)
+                .setFooter({ text: FOOTER_TEXT })
+                .setTimestamp();
+
+              await chLog.send({ embeds: [logEmbed] }).catch(() => {});
+            }
+          } else {
+            // Kısmi Onay (1/2 Kanal Tamamlandı)
+            await message.react('🟡').catch(() => {});
+
+            const completedChannel = ocrResult.detectedBirim ? '@birimfonksiyons' : '@xFrozzeq';
+            const missingChannel = !userSubs.birim ? '1. Kanal (@birimfonksiyons)' : '2. Kanal (@xFrozzeq)';
+            const missingLink = !userSubs.birim ? 'https://www.youtube.com/@birimfonksiyons' : 'https://www.youtube.com/@xFrozzeq';
+
+            const partialEmbed = new EmbedBuilder()
+              .setColor('#F59E0B')
+              .setAuthor({ name: 'Vyron Yapay Zeka (AI OCR) Doğrulama', iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+              .setTitle('🟡 1/2 KANAL ONAYLANDI (SON ADIM!)')
+              .setDescription(
+                `Sayın ${message.author},\n\n` +
+                `✅ **${completedChannel}** kanalımıza aboneliğiniz başarıyla doğrulandı!\n\n` +
+                `⚠️ **Abone rolünü alabilmek için 2. kanalımıza da abone olmanız zorunludur.**\n\n` +
+                `📌 **Kalan Kanal:** [${missingChannel}](${missingLink})\n` +
+                `👉 Lütfen şimdi bu kanalın da **TAM EKRAN** ekran görüntüsünü bu kanala yükleyiniz.`
+              )
+              .setFooter({ text: `${FOOTER_TEXT} • 2 Kanal Zorunluluğu` })
+              .setTimestamp();
+
+            await message.reply({ embeds: [partialEmbed] });
           }
         } else {
           await message.reactions.removeAll().catch(() => {});
           await message.react('❌').catch(() => {});
 
           let failTitle = '❌ ABONELİK TESPİT EDİLEMEDİ';
-          let failDesc = `Sayın ${message.author},\n\nYüklediğiniz ekran görüntüsünde **"Abone Olundu"** veya **"Subscribed"** yazısı net olarak tespit edilemedi.\n\n📌 Lütfen kanalımıza abone olup bildirim zilini açtığınızı gösteren **tam ekran** bir görüntü yükleyiniz.`;
+          let failDesc = `Sayın ${message.author},\n\nYüklediğiniz ekran görüntüsünde **"Abone Olundu"** veya **"Subscribed"** yazısı net olarak tespit edilemedi.\n\n📌 Lütfen resmi YouTube kanallarımıza abone olup **tam ekran** bir görüntü yükleyiniz.`;
 
           if (ocrResult.reason === 'not_fullscreen') {
             failTitle = '⚠️ TAM EKRAN EKRAN GÖRÜNTÜSÜ GEREKLİ';
             failDesc = `Sayın ${message.author},\n\n` +
               `Yüklediğiniz ekran görüntüsü **kırpılmış** olarak algılandı!\n\n` +
-              `🛡️ **Sahte / Başkasına Ait SS Koruması:**\n` +
+              `🛡️ **Sahte / Kırpılmış SS Koruması:**\n` +
               `• Lütfen sadece abone butonunu kırparak atmayınız.\n` +
               `• **Telefonun üst saati, şarj yüzdesi** veya **bilgisayarın tarayıcı / görev çubuğunun** gözüktüğü **TAM EKRAN (Fullscreen)** ekran görüntüsü yükleyiniz.\n\n` +
               `🔍 *Sistemimiz kırpılmış görselleri güvenlik amacıyla otomatik olarak reddetmektedir.*`;
+          } else if (ocrResult.reason === 'wrong_channel') {
+            failTitle = '❌ HEDEF RESMİ KANAL BULUNAMADI';
+            failDesc = `Sayın ${message.author},\n\n` +
+              `Yüklediğiniz ekran görüntüsü resmi klan YouTube kanallarımıza ait değil!\n\n` +
+              `📌 **Abone Olmanız Gereken Kanallar:**\n` +
+              `1. [1. Kanal: @birimfonksiyons](https://www.youtube.com/@birimfonksiyons)\n` +
+              `2. [2. Kanal: @xFrozzeq](https://www.youtube.com/@xFrozzeq)\n\n` +
+              `👉 Lütfen bu kanallara abone olarak **TAM EKRAN** SS atınız.`;
           }
 
           const failEmbed = new EmbedBuilder()
             .setColor('#EF4444')
-            .setAuthor({ name: 'Yapay Zeka (OCR) Doğrulama & Güvenlik Kalkanı', iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+            .setAuthor({ name: 'Yapay Zeka (OCR) Doğrulama Kalkanı', iconURL: message.author.displayAvatarURL({ dynamic: true }) })
             .setTitle(failTitle)
             .setDescription(failDesc)
-            .setFooter({ text: `${FOOTER_TEXT} • Tam Ekran AI Koruması` });
+            .setFooter({ text: `${FOOTER_TEXT} • 2 Kanal & Tam Ekran Koruması` });
 
           await message.reply({ embeds: [failEmbed] });
         }
@@ -845,27 +926,41 @@ client.on('interactionCreate', async (interaction) => {
           saveData(data);
         }
 
-        const chAboneLog = await getOrCreateAboneLogChannel(guild);
+        const roleMention = roleToUse ? `<@&${roleToUse.id}>` : '@Vyron • Abone';
+        const channelMention = data.aboneChannelId ? `<#${data.aboneChannelId}>` : targetChannel;
 
         const aboneEmbed = new EmbedBuilder()
           .setColor('#EF4444')
           .setAuthor({ name: 'Vyron Abone Rolü Bilgilendirme', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle('🔴 VYRON ABONE ROLÜ VE ÖZEL AVANTAJLARI')
+          .setTitle('🔴 VYRON ABONE ROLÜ BİLGİLENDİRME')
           .setDescription(
-            `### 🌟 ${roleToUse ? roleToUse : '@Vyron • Abone'} Avantajları Nelerdir?\n\n` +
-            `🎯 **Özel Texture Pack & Buton Paketleri**\n` +
-            `🎉 **Abonelere Özel VIP Çekilişler & Turnuva Önceliği**\n` +
-            `💬 **Gizli Abone Sohbeti & Özel İndirimler**\n\n` +
-            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈\n` +
-            `📌 **Rolü Otomatik Nasıl Alırım?**\n` +
-            `1. YouTube kanalımıza abone olun ve bildirim zilini açın.\n` +
-            `2. Ekran görüntüsünü (SS) ${data.aboneChannelId ? `<#${data.aboneChannelId}>` : '`#abone-ss`'} kanalına yükleyin.\n` +
-            `3. **Yapay Zeka (OCR)** görüntünüzü 2 saniyede okuyup rolünüzü otomatik versin! 🤖\n` +
-            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈`
+            `## 🌟 ${roleMention} içeriği nedir?\n\n` +
+            `> 💎 **O Arayıp Bulamadığınız Profil kodları ve Texture Packler**\n\n` +
+            `> 🎁 **Private Buton Packleri** Haftada bir kişiye özel buton pack'i kazanma şansı!\n\n` +
+            `> ⚔️ **Abonelere özel çekilişler (gear, kredi, vip)**\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `## ❓ ${roleMention} Almak için ne yapmalısınız?\n\n` +
+            `Sadece yapmanız gereken aşağıdaki youtube kanallarına abone olup **TAM EKRANLI BİR ŞEKİLDE** ScreenShot alıp ${channelMention} kanalına SS'i atmanızdır.\n\n` +
+            `📌 **1. Kanal:** https://www.youtube.com/@birimfonksiyons\n` +
+            `📌 **2. Kanal:** https://www.youtube.com/@xFrozzeq\n\n` +
+            `*(Her iki kanala da abone olmak ve tam ekran SS yüklemek zorunludur).*`
           )
-          .setFooter({ text: `${FOOTER_TEXT} • Yapay Zeka Doğrulama` });
+          .setFooter({ text: `${FOOTER_TEXT} • Yapay Zeka (OCR) Doğrulama` });
 
-        await targetChannel.send({ embeds: [aboneEmbed] });
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel('🔴 1. Kanal: @birimfonksiyons')
+            .setStyle(ButtonStyle.Link)
+            .setURL('https://www.youtube.com/@birimfonksiyons')
+            .setEmoji('▶️'),
+          new ButtonBuilder()
+            .setLabel('🔴 2. Kanal: @xFrozzeq')
+            .setStyle(ButtonStyle.Link)
+            .setURL('https://www.youtube.com/@xFrozzeq')
+            .setEmoji('▶️')
+        );
+
+        await targetChannel.send({ content: '@everyone @here', embeds: [aboneEmbed], components: [row] });
         return interaction.reply({ content: `✅ **Abone paneli ${targetChannel} kanalına başarıyla gönderildi!**`, ephemeral: true });
       }
 
@@ -876,6 +971,75 @@ client.on('interactionCreate', async (interaction) => {
         data.aboneChannelId = ch.id;
         saveData(data);
         return interaction.reply({ content: `✅ Yapay Zeka (OCR) ekran görüntüsü kanalı ${ch} olarak ayarlandı! Üyeler buraya SS attığında bot otomatik okuyacaktır.`, ephemeral: true });
+      }
+
+      // 10. /ses-tasi (TOPLU SES ODASI TAŞIMA VE ÇEKME)
+      if (commandName === 'ses-tasi') {
+        if (!isStaffMember(interaction.member, data) && !interaction.member.permissions.has(PermissionFlagsBits.MoveMembers)) {
+          return interaction.reply({ content: '🚫 Bu komutu yalnızca yetkililer kullanabilir!', ephemeral: true });
+        }
+
+        const sourceChannel = interaction.options.getChannel('kaynak_kanal');
+        let targetChannel = interaction.options.getChannel('hedef_kanal');
+
+        if (!targetChannel) {
+          targetChannel = interaction.member.voice?.channel;
+        }
+
+        if (!targetChannel) {
+          return interaction.reply({
+            content: '❌ Lütfen bir **hedef ses kanalı** seçiniz veya kendiniz bir **ses odasına giriş yapınız!**',
+            ephemeral: true
+          });
+        }
+
+        if (sourceChannel.id === targetChannel.id) {
+          return interaction.reply({
+            content: '⚠️ Kaynak kanal ile hedef kanal aynı olamaz!',
+            ephemeral: true
+          });
+        }
+
+        const membersToMove = Array.from(sourceChannel.members.values());
+        if (membersToMove.length === 0) {
+          return interaction.reply({
+            content: `⚠️ ${sourceChannel} kanalında taşınacak hiç kimse bulunmuyor!`,
+            ephemeral: true
+          });
+        }
+
+        await interaction.deferReply({ ephemeral: false });
+
+        let movedCount = 0;
+        let failCount = 0;
+
+        for (const m of membersToMove) {
+          try {
+            await m.voice.setChannel(targetChannel);
+            movedCount++;
+            await new Promise(r => setTimeout(r, 150));
+          } catch (e) {
+            failCount++;
+          }
+        }
+
+        const moveEmbed = new EmbedBuilder()
+          .setColor('#10B981')
+          .setAuthor({ name: `${interaction.guild.name} • Toplu Ses Taşıma`, iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
+          .setTitle('🔊 〖 TOPLU SES TAŞIMA İŞLEMİ TAMAMLANDI 〗 🔊')
+          .setDescription(
+            `Yetkili ${interaction.user} tarafından ses odası aktarımı gerçekleştirildi:\n\n` +
+            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈\n` +
+            `📤 **Kaynak Oda:** ${sourceChannel} (\`${sourceChannel.name}\`)\n` +
+            `📥 **Hedef Oda:** ${targetChannel} (\`${targetChannel.name}\`)\n` +
+            `👥 **Taşınan Kişi Sayısı:** \`${movedCount} üye\`\n` +
+            (failCount > 0 ? `⚠️ *(${failCount} kişi bağlantı/yetki hatası sebebiyle taşınamadı).*` : '') + `\n` +
+            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈`
+          )
+          .setFooter({ text: `${FOOTER_TEXT} • Ses Yönetim Sistemi` })
+          .setTimestamp();
+
+        return interaction.editReply({ embeds: [moveEmbed] });
       }
     }
 
@@ -1209,7 +1373,6 @@ client.on('interactionCreate', async (interaction) => {
 
         const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
 
-        // Klan Rolünü Ver
         let roleGiven = false;
         if (applicantMember) {
           const roleId = data.applyClanRoleId;
@@ -1221,7 +1384,6 @@ client.on('interactionCreate', async (interaction) => {
           }
         }
 
-        // Adaya Özel DM Gönderimi
         if (applicantMember) {
           try {
             const acceptDmEmbed = new EmbedBuilder()
@@ -1229,12 +1391,8 @@ client.on('interactionCreate', async (interaction) => {
               .setAuthor({ name: `${interaction.guild.name} • Başvuru Sonucu: ONAYLANDI`, iconURL: interaction.guild.iconURL({ dynamic: true }) })
               .setTitle('🎉 TEBRİKLER! KLAN BAŞVURUNUZ KABUL EDİLDİ ⚔️')
               .setDescription(
-                `Tebrikler ${applicantMember} (\`${ign}\`)!
-
-` +
-                `**${interaction.guild.name}** klan başvurunuz yetkilimiz **${member.user.tag}** tarafından incelenmiş ve **TEMİZ** olarak onaylanmıştır.
-
-` +
+                `Tebrikler ${applicantMember} (\`${ign}\`)!\n\n` +
+                `**${interaction.guild.name}** klan başvurunuz yetkilimiz **${member.user.tag}** tarafından incelenmiş ve **TEMİZ** olarak onaylanmıştır.\n\n` +
                 `🛡️ Sunucudaki klan rolleriniz tanımlanmıştır. Ailemize ve savaş kadromuza hoş geldiniz!`
               )
               .setFooter({ text: FOOTER_TEXT })
@@ -1249,15 +1407,9 @@ client.on('interactionCreate', async (interaction) => {
           .setAuthor({ name: 'Vyron Klanı • Başvuru Onaylandı', iconURL: interaction.guild.iconURL({ dynamic: true }) })
           .setTitle('🎉 〖 BAŞVURU KABUL EDİLDİ (TEMİZ) 〗 🎉')
           .setDescription(
-            `Tebrikler <@${applicantId}> (\`${ign}\`)!
-
-` +
-            `Yetkilimiz ${member} tarafından yapılan inceleme ve kontroller sonucunda **Vyron Klanına kabul edildiniz.**
-
-` +
-            (roleGiven ? `✅ Klan rolleriniz başarıyla tanımlandı.` : `⚠️ *Klan rolü bulunamadı, lütfen manuel rol veriniz.*`) + `
-
-` +
+            `Tebrikler <@${applicantId}> (\`${ign}\`)!\n\n` +
+            `Yetkilimiz ${member} tarafından yapılan inceleme ve kontroller sonucunda **Vyron Klanına kabul edildiniz.**\n\n` +
+            (roleGiven ? `✅ Klan rolleriniz başarıyla tanımlandı.` : `⚠️ *Klan rolü bulunamadı, lütfen manuel rol veriniz.*`) + `\n\n` +
             `🔒 **Başvuru tamamlandı. Bu oda 5 saniye içinde otomatik olarak kapatılacaktır...**`
           )
           .setFooter({ text: FOOTER_TEXT })
@@ -1291,12 +1443,8 @@ client.on('interactionCreate', async (interaction) => {
               .setAuthor({ name: `${interaction.guild.name} • Başvuru Sonucu: REDDEDİLDİ`, iconURL: interaction.guild.iconURL({ dynamic: true }) })
               .setTitle('❌ KLAN BAŞVURUNUZ ONAYLANMADI')
               .setDescription(
-                `Sayın ${applicantMember},
-
-` +
-                `**${interaction.guild.name}** klan başvurunuz yetkilimiz **${member.user.tag}** tarafından yapılan değerlendirme sonucunda maalesef **olumsuz sonuçlanmıştır.**
-
-` +
+                `Sayın ${applicantMember},\n\n` +
+                `**${interaction.guild.name}** klan başvurunuz yetkilimiz **${member.user.tag}** tarafından yapılan değerlendirme sonucunda maalesef **olumsuz sonuçlanmıştır.**\n\n` +
                 `Gelecek alımlarda kendinizi geliştirerek tekrar başvurabilirsiniz.`
               )
               .setFooter({ text: FOOTER_TEXT })
@@ -1310,12 +1458,8 @@ client.on('interactionCreate', async (interaction) => {
           .setColor('#EF4444')
           .setTitle('❌ KLAN BAŞVURUNUZ ONAYLANMADI')
           .setDescription(
-            `Sayın <@${applicantId}>,
-
-` +
-            `Yetkilimiz ${member} tarafından yapılan değerlendirme sonucunda klan başvurunuz maalesef **olumsuz sonuçlanmıştır.**
-
-` +
+            `Sayın <@${applicantId}>,\n\n` +
+            `Yetkilimiz ${member} tarafından yapılan değerlendirme sonucunda klan başvurunuz maalesef **olumsuz sonuçlanmıştır.**\n\n` +
             `🔒 **Bu başvuru odası 5 saniye içinde otomatik olarak silinecektir.**`
           )
           .setFooter({ text: FOOTER_TEXT });
@@ -1346,9 +1490,7 @@ client.on('interactionCreate', async (interaction) => {
           const logEmb = new EmbedBuilder()
             .setColor('#EF4444')
             .setTitle('🚫 BAŞVURUDA HİLE TESPİTİ NEDENİYLE ELENDİ')
-            .setDescription(`👤 **Aday:** <@${applicantId}>
-🛡️ **İnceleyen Yetkili:** ${member}
-⏰ **Tarih:** <t:${Math.floor(Date.now() / 1000)}:F>`)
+            .setDescription(`👤 **Aday:** <@${applicantId}>\n🛡️ **İnceleyen Yetkili:** ${member}\n⏰ **Tarih:** <t:${Math.floor(Date.now() / 1000)}:F>`)
             .setTimestamp();
           await chLog.send({ embeds: [logEmb] }).catch(() => {});
         }
@@ -1365,12 +1507,8 @@ client.on('interactionCreate', async (interaction) => {
           .setColor('#EF4444')
           .setTitle('🚫 HİLE TESPİTİ SEBEBİYLE BAŞVURU İPTAL EDİLDİ')
           .setDescription(
-            `Sayın <@${applicantId}>,
-
-` +
-            `Anydesk / inceleme sırasında **hile veya şüpheli dosya kalıntısı** tespit edildiği için başvurunuz derhal reddedilmiştir.
-
-` +
+            `Sayın <@${applicantId}>,\n\n` +
+            `Anydesk / inceleme sırasında **hile veya şüpheli dosya kalıntısı** tespit edildiği için başvurunuz derhal reddedilmiştir.\n\n` +
             `🔒 **Bu başvuru odası 5 saniye içinde otomatik olarak silinecektir.**`
           )
           .setFooter({ text: FOOTER_TEXT });
