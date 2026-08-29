@@ -1,6 +1,6 @@
 {
   "name": "discord-allinone-bot",
-  "version": "2.1.4",
+  "version": "2.2.0",
   "description": "Vyron ticket, klan başvuru, ses ve 2/2 YouTube abone doğrulama botu",
   "main": "index.js",
   "scripts": {
