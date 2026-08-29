@@ -1,9 +1,10 @@
 {
   "name": "discord-allinone-bot",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "description": "Vyron ticket, klan başvuru, ses ve 2/2 YouTube abone doğrulama botu",
   "main": "index.js",
   "scripts": {
+    "postinstall": "node scripts/prepare-runtime-fixes.js && node --check index.js",
     "prestart": "node scripts/prepare-runtime-fixes.js",
     "start": "node index.js",
     "check": "node scripts/prepare-runtime-fixes.js && node --check index.js"
