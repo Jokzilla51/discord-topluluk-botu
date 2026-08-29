@@ -34,7 +34,12 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const { joinVoiceChannel, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+let voiceModule = null;
+try {
+  voiceModule = require('@discordjs/voice');
+} catch (e) {
+  console.log('@discordjs/voice modülü bulunamadı, ses özellikleri için package.json güncellenmelidir.');
+}
 const http = require('http');
 
 let Tesseract;
@@ -366,6 +371,17 @@ let currentVoiceConnection = null;
 
 async function connectToVoiceChannel(channel) {
   if (!channel) return null;
+  if (!voiceModule) {
+    try {
+      voiceModule = require('@discordjs/voice');
+    } catch (e) {
+      console.log('Ses modülü yüklü değil. Seste kalma özelliği için GitHub package.json dosyasına @discordjs/voice eklenmelidir.');
+      return null;
+    }
+  }
+
+  const { joinVoiceChannel, VoiceConnectionStatus, entersState } = voiceModule;
+
   try {
     const connection = joinVoiceChannel({
       channelId: channel.id,
