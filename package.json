@@ -4,9 +4,9 @@
   "description": "Vyron ticket, klan başvuru, ses ve 2/2 YouTube abone doğrulama botu",
   "main": "index.js",
   "scripts": {
-    "prestart": "node scripts/apply-runtime-fixes.js",
+    "prestart": "node scripts/prepare-runtime-fixes.js",
     "start": "node index.js",
-    "check": "node scripts/apply-runtime-fixes.js && node --check index.js"
+    "check": "node scripts/prepare-runtime-fixes.js && node --check index.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
