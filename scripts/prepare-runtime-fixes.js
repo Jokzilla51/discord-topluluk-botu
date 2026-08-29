@@ -50,4 +50,27 @@ if (source.includes('// VYRON_PATCH_V3')) {
   }
 }
 
+// OCR HIZLANDIRMA:
+// Tesseract.recognize() her SS'de yeni worker açıp kapatır. Tek worker'ı önceden
+// hazırlayıp tekrar kullanarak özellikle ikinci ve sonraki doğrulamaları hızlandır.
+source = readIndex();
+if (!source.includes('// VYRON_SHARED_OCR_WORKER')) {
+  const tesseractAnchor = `let Tesseract;\ntry {\n  Tesseract = require('tesseract.js');\n} catch (e) {\n  console.log('Tesseract.js ilk yüklemede hazır değil, gerektiğinde çağrılacak.');\n}\n`;
+
+  const sharedWorkerCode = `${tesseractAnchor}\n// VYRON_SHARED_OCR_WORKER\nlet sharedOcrWorkerPromise = null;\nlet sharedOcrQueue = Promise.resolve();\n\nasync function getSharedOcrWorker() {\n  if (!sharedOcrWorkerPromise) {\n    sharedOcrWorkerPromise = (async () => {\n      if (!Tesseract) Tesseract = require('tesseract.js');\n      const worker = await Tesseract.createWorker('eng', undefined, { logger: () => {} });\n      return worker;\n    })().catch(error => {\n      sharedOcrWorkerPromise = null;\n      throw error;\n    });\n  }\n  return sharedOcrWorkerPromise;\n}\n\nasync function recognizeWithSharedWorker(imageUrl) {\n  const job = sharedOcrQueue.then(async () => {\n    let worker = await getSharedOcrWorker();\n    try {\n      return await worker.recognize(imageUrl);\n    } catch (error) {\n      try { await worker.terminate(); } catch {}\n      sharedOcrWorkerPromise = null;\n      worker = await getSharedOcrWorker();\n      return worker.recognize(imageUrl);\n    }\n  });\n\n  sharedOcrQueue = job.catch(() => {});\n  return job;\n}\n\n// İlk kullanıcı SS atmadan OCR worker hazır olsun.\nsetTimeout(() => {\n  getSharedOcrWorker()\n    .then(() => console.log('⚡ OCR worker hazır.'))\n    .catch(error => console.error('OCR worker ön yükleme hatası:', error.message));\n}, 1500);\n`;
+
+  if (source.includes(tesseractAnchor)) {
+    source = source.replace(tesseractAnchor, sharedWorkerCode);
+  } else {
+    console.warn('OCR worker ekleme noktası bulunamadı; mevcut OCR davranışı korunuyor.');
+  }
+}
+
+const recognizeRegex = /await Tesseract\.recognize\(imageUrl,\s*'eng',\s*\{\s*logger:\s*\(\)\s*=>\s*\{\}\s*\}\s*\)/g;
+if (recognizeRegex.test(source)) {
+  source = source.replace(recognizeRegex, 'await recognizeWithSharedWorker(imageUrl)');
+  console.log('⚡ OCR tek worker kullanımına geçirildi.');
+}
+
+writeIndex(source);
 console.log('✅ Vyron runtime hazırlığı tamamlandı.');
