@@ -29,10 +29,12 @@ const {
   EmbedBuilder,
   ModalBuilder,
   TextInputBuilder,
-  TextInputStyle
+  TextInputStyle,
+  ActivityType
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { joinVoiceChannel, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const http = require('http');
 
 let Tesseract;
@@ -73,6 +75,7 @@ function loadData() {
         aboneChannelId: parsed.aboneChannelId || null,
         aboneRoleId: parsed.aboneRoleId || null,
         aboneLogChannelId: parsed.aboneLogChannelId || null,
+        botVoiceChannelId: parsed.botVoiceChannelId || null,
         userSubscribedChannels: parsed.userSubscribedChannels || {}
       };
     }
@@ -88,6 +91,7 @@ function loadData() {
     aboneChannelId: null,
     aboneRoleId: null,
     aboneLogChannelId: null,
+    botVoiceChannelId: null,
     userSubscribedChannels: {}
   };
 }
@@ -168,6 +172,7 @@ async function syncDataFromDiscordCloud(guild) {
       if (cloudData.aboneChannelId) localData.aboneChannelId = cloudData.aboneChannelId;
       if (cloudData.aboneRoleId) localData.aboneRoleId = cloudData.aboneRoleId;
       if (cloudData.aboneLogChannelId) localData.aboneLogChannelId = cloudData.aboneLogChannelId;
+      if (cloudData.botVoiceChannelId) localData.botVoiceChannelId = cloudData.botVoiceChannelId;
       if (cloudData.userSubscribedChannels) {
         localData.userSubscribedChannels = { ...localData.userSubscribedChannels, ...cloudData.userSubscribedChannels };
       }
@@ -195,6 +200,7 @@ async function syncDataToDiscordCloud(guild) {
       aboneChannelId: data.aboneChannelId,
       aboneRoleId: data.aboneRoleId,
       aboneLogChannelId: data.aboneLogChannelId,
+      botVoiceChannelId: data.botVoiceChannelId,
       userSubscribedChannels: data.userSubscribedChannels,
       savedAt: new Date().toISOString()
     }, null, 2);
@@ -215,21 +221,10 @@ const activeClaimedTickets = new Map(); // channelId -> { claimedBy, claimedAt }
 const ticketTranscripts = new Map();     // channelId -> Array<{ author, content, timestamp }>
 
 // ==========================================
-// 3. YAPAY ZEKA (OCR) MOTORU (2 KANAL, 1080P BOYUT & SAAT ZORUNLU)
+// 3. YAPAY ZEKA (OCR) MOTORU (GELİŞMİŞ, ESNEK & AKILLI DOĞRULAMA)
 // ==========================================
 async function analyzeYoutubeScreenshot(imageUrl, width, height) {
   try {
-    // 0. ÇÖZÜNÜRLÜK & BOYUT KONTROLÜ (Kırpılmış / Küçük Görsel Engeli)
-    if (width && height) {
-      if (width < 900 && height < 900) {
-        return {
-          isValid: false,
-          reason: 'low_resolution',
-          message: 'Yüklediğiniz görsel 1080p tam ekran boyutunda değil (kırpılmış)! Lütfen orijinal tam ekran SS yükleyiniz.'
-        };
-      }
-    }
-
     if (!Tesseract) {
       try {
         Tesseract = require('tesseract.js');
@@ -245,72 +240,102 @@ async function analyzeYoutubeScreenshot(imageUrl, width, height) {
 
     const rawText = (result?.data?.text || '').toLowerCase();
     
-    // Karakter normalizasyonu
+    // Karakter normalizasyonu (Türkçe ve OCR hatalarına karşı)
     const cleanText = rawText
       .replace(/ı/g, 'i')
       .replace(/ğ/g, 'g')
       .replace(/ü/g, 'u')
       .replace(/ş/g, 's')
       .replace(/ö/g, 'o')
-      .replace(/ç/g, 'c');
+      .replace(/ç/g, 'c')
+      .replace(/\|/g, 'l');
 
-    // 1. ABONELİK İBARESİ KONTROLÜ
+    const compactText = cleanText.replace(/[^a-z0-9]/g, '');
+
+    // 1. ABONELİK İBARESİ KONTROLÜ (Genişletilmiş Kelime Havuzu)
     const subKeywords = [
-      'abone olundu', 'abonesiniz', 'abone', 'abonelik', 'subscribed', 'subscriber',
-      'subscribers', 'abonniert', 'abonne', 'suscrito', 'bildirim', 'bildirimler',
-      'zil', 'tumu', 'tum bildirimler', 'all notifications'
+      'abone', 'olundu', 'abonesin', 'abonesiniz', 'abonelik', 'subscribed',
+      'subscriber', 'subscribers', 'subbed', 'abonniert', 'abonne', 'suscrito',
+      'bildirim', 'bildirimler', 'zil', 'tumu', 'tum bildirimler', 'all notifications',
+      'abone ol'
     ];
-    const hasSub = subKeywords.some(k => cleanText.includes(k));
+    const hasSub = subKeywords.some(k => cleanText.includes(k)) ||
+                   compactText.includes('aboneolundu') ||
+                   compactText.includes('abonesiniz') ||
+                   compactText.includes('subscribed') ||
+                   compactText.includes('abone') ||
+                   compactText.includes('bildirim');
 
-    // 2. SAAT & ZAMAN GÖSTERGESİ KONTROLÜ (ZORUNLU)
-    // 00:00 - 23:59 veya 1:00 - 12:59 formatında saat kontrolü
-    const hasClockTime = /\b([01]?[0-9]|2[0-3])[:.][0-5][0-9]\b/.test(cleanText) ||
-                         /\b(1[0-2]|0?[1-9])[:.][0-5][0-9]\s*(am|pm)?\b/.test(cleanText);
+    // 2. HEDEF KANAL KONTROLÜ (1. Kanal: @birimfonksiyons / 2. Kanal: @xFrozzeq)
+    const birimKeywords = [
+      'birim', 'fonksiyon', 'birimfonk', 'birimfonksiyon', 'birimfonksiyons',
+      'fonksiyons', 'vyron', 'birimfnk'
+    ];
+    const frozKeywords = [
+      'froz', 'frozzeq', 'xfrozzeq', 'sarsilmaz', 'frozeq', 'xfroz', 'frozsarsilmaz'
+    ];
 
-    // 3. TAM EKRAN ARAYÜZ ELEMANLARI
+    const detectedBirim = birimKeywords.some(k => cleanText.includes(k) || compactText.includes(k.replace(/[^a-z0-9]/g, '')));
+    const detectedFroz = frozKeywords.some(k => cleanText.includes(k) || compactText.includes(k.replace(/[^a-z0-9]/g, '')));
+
+    // 3. TAM EKRAN (FULLSCREEN) & ARAYÜZ KONTROLÜ (Akıllı Puanlama Sistemi)
+    // A. Saat ve Zaman Formatları
+    const hasClockTime = /\b([01]?[0-9]|2[0-3])[:.;'\s][0-5][0-9]\b/.test(cleanText) ||
+                         /\b(1[0-2]|0?[1-9])[:.][0-5][0-9]\s*(am|pm)?\b/.test(cleanText) ||
+                         compactText.includes('2024') || compactText.includes('2025') || compactText.includes('2026') ||
+                         cleanText.includes('am') || cleanText.includes('pm');
+
+    // B. Mobil Durum Çubuğu / Pil / Ağ
+    const hasBatteryOrNet = cleanText.includes('%') || cleanText.includes('4g') || cleanText.includes('5g') ||
+                            cleanText.includes('lte') || cleanText.includes('wifi') || cleanText.includes('volte') ||
+                            cleanText.includes('turkcell') || cleanText.includes('vodafone') || cleanText.includes('telekom');
+
+    // C. Tarayıcı & Masaüstü
+    const hasBrowserOrDesktop = cleanText.includes('youtube.com') || cleanText.includes('http') || cleanText.includes('https') ||
+                                cleanText.includes('chrome') || cleanText.includes('opera') || cleanText.includes('edge') ||
+                                cleanText.includes('brave') || cleanText.includes('google') || cleanText.includes('.com');
+
+    // D. YouTube Arayüz Butonları
     const uiKeywords = [
       'shorts', 'abonelikler', 'kitaplik', 'ana sayfa', 'home', 'subscriptions',
-      'library', 'you', 'youtube', 'video', 'videolar', 'oynatma', 'begen',
-      'paylas', 'indir', 'kaydet', 'yorum', 'arama', 'search', 'views',
-      'goruntulenme', 'begenme', 'like', 'dislike', 'share', 'chrome',
-      'google', 'opera', 'edge', 'com', 'http', 'https', 'abone ol'
+      'library', 'you', 'siz', 'gecmis', 'arama', 'search', 'views',
+      'goruntulenme', 'begenme', 'like', 'dislike', 'share', 'paylas',
+      'indir', 'kaydet', 'yorum', 'videolar', 'oynatma'
     ];
-    const matchedUI = uiKeywords.filter(k => cleanText.includes(k));
-    const hasBatteryOrNet = cleanText.includes('%') || cleanText.includes('4g') || cleanText.includes('5g') || cleanText.includes('lte') || cleanText.includes('wifi') || cleanText.includes('volte');
+    const matchedUI = uiKeywords.filter(k => cleanText.includes(k) || compactText.includes(k));
 
-    // Tam ekran sayılması için: Saat MUTLAKA görünmeli ve en az 1-2 arayüz öğesi olmalı
-    const isFullScreen = hasClockTime && (matchedUI.length >= 1 || hasBatteryOrNet);
+    // E. Görsel Boyut Oranı (Aspect Ratio)
+    let isStandardAspectRatio = false;
+    if (width && height) {
+      const ratio = height / width;
+      // Dikey telefon (1.4 - 2.4) veya Yatay PC (1.3 - 2.0)
+      if ((ratio >= 1.3 && ratio <= 2.5) || (width / height >= 1.2 && width / height <= 2.2)) {
+        isStandardAspectRatio = true;
+      }
+    }
 
-    // 4. HEDEF KANAL KONTROLÜ (1. Kanal: @birimfonksiyons / 2. Kanal: @xFrozzeq)
-    const isBirimChannel = cleanText.includes('birimfonksiyons') ||
-                           cleanText.includes('birimfonksiyon') ||
-                           cleanText.includes('birim') ||
-                           cleanText.includes('fonksiyon');
+    // Tam Ekran Onay Kuralı (Esnek ve Güvenli):
+    // Saat varsa VEYA Şarj/Ağ varsa VEYA Tarayıcı/Arayüz varsa VEYA Ekran Oranı standard ve 1 UI elemanı varsa
+    const isFullScreen = hasClockTime ||
+                         hasBatteryOrNet ||
+                         hasBrowserOrDesktop ||
+                         (matchedUI.length >= 1) ||
+                         (isStandardAspectRatio && (hasSub || detectedBirim || detectedFroz));
 
-    const isFrozChannel = cleanText.includes('xfrozzeq') ||
-                          cleanText.includes('frozzeq') ||
-                          cleanText.includes('froz') ||
-                          cleanText.includes('sarsilmaz');
-
-    const isVyronChannel = cleanText.includes('vyron');
-
-    const detectedBirim = isBirimChannel || isVyronChannel;
-    const detectedFroz = isFrozChannel;
-
-    // Doğrulama Hata Kontrolleri
+    // Doğrulama Kontrolleri
     if (!hasSub) {
       return {
         isValid: false,
         reason: 'sub_not_found',
-        message: 'Görselde "Abone Olundu" veya "Subscribed" yazısı tespit edilemedi.'
+        message: 'Görselde "Abone Olundu" veya "Subscribed" ibaresi okunamadı.'
       };
     }
 
-    if (!hasClockTime || !isFullScreen) {
+    if (!isFullScreen) {
       return {
         isValid: false,
-        reason: 'not_fullscreen_or_no_clock',
-        message: 'Görselde telefon/bilgisayar SAATİ veya 1080p tam ekran arayüzü tespit edilemedi! Lütfen saatin ve arayüzün net gözüktüğü TAM EKRAN SS atınız.'
+        reason: 'not_fullscreen',
+        message: 'Yüklediğiniz görsel tam ekran arayüzü içermiyor veya kırpılmış görünüyor.'
       };
     }
 
@@ -318,7 +343,7 @@ async function analyzeYoutubeScreenshot(imageUrl, width, height) {
       return {
         isValid: false,
         reason: 'wrong_channel',
-        message: 'Bu ekran görüntüsü @birimfonksiyons veya @xFrozzeq kanallarımıza ait değil!'
+        message: 'Bu ekran görüntüsü @birimfonksiyons veya @xFrozzeq kanallarımıza ait görünmüyor.'
       };
     }
 
@@ -326,12 +351,49 @@ async function analyzeYoutubeScreenshot(imageUrl, width, height) {
       isValid: true,
       detectedBirim,
       detectedFroz,
-      isFullScreen: true,
-      hasClockTime: true
+      isFullScreen: true
     };
   } catch (error) {
     console.error('OCR Analiz Hatası:', error);
     return { isValid: false, reason: 'error', message: error.message };
+  }
+}
+
+// ----------------------------------------------------
+// 7/24 SES ODASINDA AFK KALMA SİSTEMİ (MİKROFON & KULAKLIK KAPALI)
+// ----------------------------------------------------
+let currentVoiceConnection = null;
+
+async function connectToVoiceChannel(channel) {
+  if (!channel) return null;
+  try {
+    const connection = joinVoiceChannel({
+      channelId: channel.id,
+      guildId: channel.guild.id,
+      adapterCreator: channel.guild.voiceAdapterCreator,
+      selfMute: true,  // Mikrofon kapalı
+      selfDeaf: true   // Kulaklık kapalı
+    });
+
+    currentVoiceConnection = connection;
+
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      try {
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5000),
+        ]);
+      } catch (error) {
+        try { connection.destroy(); } catch (e) {}
+        setTimeout(() => connectToVoiceChannel(channel), 5000);
+      }
+    });
+
+    console.log(`🔊 Bot 7/24 Ses Odasına Bağlandı (Mute & Deafen): ${channel.name}`);
+    return connection;
+  } catch (err) {
+    console.error('Sese bağlanma hatası:', err);
+    return null;
   }
 }
 
@@ -629,6 +691,18 @@ const commands = [
         .setDescription('Üyelerin aktarılacağı hedef ses odası (Seçilmezse bulunduğunuz odaya çeker)')
         .setRequired(false)
         .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+    ),
+
+  // 11. /bot-ses (Botun 7/24 Kalacağı Ses Kanalı)
+  new SlashCommandBuilder()
+    .setName('bot-ses')
+    .setDescription('Botun 7/24 mikrofon ve kulaklığı kapalı şekilde oturacağı ses kanalını belirler.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Botun katılacağı ses odası (Örn: Lobi Katıl / AFK / Bekleme)')
+        .setRequired(true)
+        .addChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
     )
 ];
 
@@ -664,6 +738,39 @@ client.once('ready', async () => {
       );
       console.log(`✅ Komutlar ve Bulut Verileri yüklendi: ${guild.name} (${guildId})`);
     }
+
+    // 7/24 discord.gg/vyronmc Oynuyor Durumu & Ses Odasına Giriş
+    client.user.setPresence({
+      activities: [{ name: 'discord.gg/vyronmc', type: ActivityType.Playing }],
+      status: 'online'
+    });
+
+    for (const [guildId, guild] of client.guilds.cache) {
+      const data = loadData();
+      let targetVoice = null;
+      if (data.botVoiceChannelId) {
+        targetVoice = guild.channels.cache.get(data.botVoiceChannelId);
+      }
+      if (!targetVoice) {
+        targetVoice = guild.channels.cache.find(c =>
+          (c.type === ChannelType.GuildVoice || c.type === ChannelType.GuildStageVoice) &&
+          (c.name.toLowerCase().includes('lobi') || c.name.toLowerCase().includes('katil') || c.name.toLowerCase().includes('afk') || c.name.toLowerCase().includes('bekleme'))
+        );
+      }
+      if (targetVoice) {
+        await connectToVoiceChannel(targetVoice).catch(() => {});
+      }
+    }
+
+    // Durumu ve sesi periyodik olarak canlı tut
+    setInterval(() => {
+      try {
+        client.user.setPresence({
+          activities: [{ name: 'discord.gg/vyronmc', type: ActivityType.Playing }],
+          status: 'online'
+        });
+      } catch (e) {}
+    }, 15 * 60 * 1000);
 
     // Global komutları temizle
     await rest.put(
@@ -809,34 +916,41 @@ client.on('messageCreate', async (message) => {
           await message.react('❌').catch(() => {});
 
           let failTitle = '❌ ABONELİK TESPİT EDİLEMEDİ';
-          let failDesc = `Sayın ${message.author},\n\nYüklediğiniz ekran görüntüsünde **"Abone Olundu"** veya **"Subscribed"** yazısı net olarak tespit edilemedi.\n\n📌 Lütfen resmi YouTube kanallarımıza abone olup **tam ekran** bir görüntü yükleyiniz.`;
+          let failDesc = `Sayın ${message.author},\n\nYüklediğiniz ekran görüntüsünde **"Abone Olundu"** veya **"Subscribed"** yazısı net okunamadı.\n\n📌 Lütfen resmi YouTube kanallarımıza abone olup **tam ekran** bir görüntü yükleyiniz.`;
 
-          if (ocrResult.reason === 'not_fullscreen_or_no_clock' || ocrResult.reason === 'low_resolution') {
-            failTitle = '⚠️ TAM EKRAN & SAAT GÖSTERGESİ GEREKLİ';
+          if (ocrResult.reason === 'not_fullscreen') {
+            failTitle = '⚠️ TAM EKRAN GÖRÜNTÜ GEREKLİ';
             failDesc = `Sayın ${message.author},\n\n` +
-              `Yüklediğiniz ekran görüntüsü **tam ekran (1080p) veya saat içermiyor** olarak algılandı!\n\n` +
-              `🛡️ **Tam Ekran & Güvenlik Kuralı:**\n` +
-              `• 💻 **Bilgisayarda:** Ekranın sağ altındaki **Saat / Tarih** ve tarayıcı sekmesi **MUTLAKA** gözükmelidir.\n` +
-              `• 📱 **Telefonda:** Ekranın en üstündeki **Saat, Pil / Şarj yüzdesi** net gözükmelidir.\n` +
-              `• ❌ *Kırpılmış veya saat gözükmeyen ekran görüntüleri kabul edilmemektedir.*`;
+              `Yüklediğiniz görsel **kırpılmış** olarak algılandı!\n\n` +
+              `🛡️ **Tam Ekran Kuralı:**\n` +
+              `• Lütfen sadece abone butonunu kırparak atmayınız.\n` +
+              `• Telefon veya bilgisayarınızın tüm ekranını **TAM EKRAN (Fullscreen)** olarak yükleyiniz.`;
           } else if (ocrResult.reason === 'wrong_channel') {
             failTitle = '❌ HEDEF RESMİ KANAL BULUNAMADI';
             failDesc = `Sayın ${message.author},\n\n` +
-              `Yüklediğiniz ekran görüntüsü resmi klan YouTube kanallarımıza ait değil!\n\n` +
+              `Yüklediğiniz ekran görüntüsünde resmi klan YouTube kanallarımız tespit edilemedi!\n\n` +
               `📌 **Abone Olmanız Gereken Kanallar:**\n` +
               `1. [1. Kanal: @birimfonksiyons](https://www.youtube.com/@birimfonksiyons)\n` +
               `2. [2. Kanal: @xFrozzeq](https://www.youtube.com/@xFrozzeq)\n\n` +
-              `👉 Lütfen bu kanallara abone olarak **TAM EKRAN** SS atınız.`;
+              `👉 Lütfen bu kanalların **TAM EKRAN** görüntüsünü yükleyiniz.`;
           }
 
           const failEmbed = new EmbedBuilder()
             .setColor('#EF4444')
             .setAuthor({ name: 'Yapay Zeka (OCR) Doğrulama Kalkanı', iconURL: message.author.displayAvatarURL({ dynamic: true }) })
             .setTitle(failTitle)
-            .setDescription(failDesc)
-            .setFooter({ text: `${FOOTER_TEXT} • 2 Kanal & Tam Ekran Koruması` });
+            .setDescription(failDesc + `\n\n💡 *Eğer görüntünüzün doğru ve tam ekran olduğunu düşünüyorsanız aşağıdaki butona basarak yetkiliden manuel onay isteyebilirsiniz.*`)
+            .setFooter({ text: `${FOOTER_TEXT} • Otomatik AI & Manuel Yedek` });
 
-          await message.reply({ embeds: [failEmbed] });
+          const failRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`btn_abone_manual_req_${message.author.id}`)
+              .setLabel('✋ Yetkili Onayına Gönder')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('📩')
+          );
+
+          await message.reply({ embeds: [failEmbed], components: [failRow] });
         }
       }
     }
@@ -1194,7 +1308,40 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
 
-    // ----------------------------------------------------
+      // 11. /bot-ses (7/24 SES KANALI AYARLAMA)
+      if (commandName === 'bot-ses') {
+        if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
+        const voiceChannel = interaction.options.getChannel('kanal');
+
+        data.botVoiceChannelId = voiceChannel.id;
+        saveData(data);
+
+        await connectToVoiceChannel(voiceChannel);
+
+        const voiceEmbed = new EmbedBuilder()
+          .setColor('#10B981')
+          .setAuthor({ name: `${interaction.guild.name} • 7/24 Ses Sistemi`, iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
+          .setTitle('🔊 〖 7/24 SES ODASI AKTİF EDİLDİ 〗 🔊')
+          .setDescription(
+            `Bot başarıyla ${voiceChannel} (\`${voiceChannel.name}\`) odasına bağlandı!
+
+` +
+            `🔇 **Mikrofon:** Kapalı (Self-Mute)
+` +
+            `🎧 **Kulaklık:** Kapalı (Self-Deaf)
+` +
+            `🔄 **Yeniden Bağlanma:** 7/24 Otomatik Koruma Aktif
+
+` +
+            `*Bot sunucu yeniden başlasa bile bu odada AFK kalmaya devam edecektir.*`
+          )
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [voiceEmbed] });
+      }
+
+        // ----------------------------------------------------
     // B. KATEGORİLİ TICKET AÇMA (SELECT MENU)
     // ----------------------------------------------------
     if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select_category') {
@@ -1686,6 +1833,111 @@ client.on('interactionCreate', async (interaction) => {
           await channel.delete().catch(() => {});
         }, 5000);
       }
+
+      // 7. ABONE MANUEL YETKİLİ ONAY TALEBİ BUTONU
+      if (customId.startsWith('btn_abone_manual_req_')) {
+        const applicantId = customId.replace('btn_abone_manual_req_', '');
+        if (interaction.user.id !== applicantId) {
+          return interaction.reply({ content: '🚫 Bu butonu yalnızca görseli yükleyen üye kullanabilir!', ephemeral: true });
+        }
+
+        const guild = interaction.guild;
+        const chLog = await getOrCreateAboneLogChannel(guild);
+        if (!chLog) {
+          return interaction.reply({ content: '❌ Abone log kanalı bulunamadı. Lütfen yetkiliye bildiriniz.', ephemeral: true });
+        }
+
+        // Kullanıcının attığı son mesajdaki resmi bul
+        const refMessage = interaction.message.reference ? await interaction.channel.messages.fetch(interaction.message.reference.messageId).catch(() => null) : null;
+        const imgUrl = refMessage?.attachments?.first()?.url || null;
+
+        const manualEmbed = new EmbedBuilder()
+          .setColor('#F59E0B')
+          .setAuthor({ name: `${guild.name} • Manuel Abone Onay Talebi`, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) })
+          .setTitle('✋ 〖 YETKİLİ MANUEL ABONE ONAYI BEKLENİYOR 〗')
+          .setDescription(
+            `Kullanıcı ${interaction.user} (\`${interaction.user.tag}\` - \`${interaction.user.id}\`) yapay zekanın okuyamadığı ekran görüntüsü için **manuel yetkili onayı** talep etti.
+
+` +
+            `🔍 Lütfen aşağıdaki görseli inceleyip onaylayınız veya reddediniz:`
+          )
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        if (imgUrl) manualEmbed.setImage(imgUrl);
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`btn_abone_staff_grant_${interaction.user.id}`).setLabel('✅ Abone Rolü Ver (Onayla)').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`btn_abone_staff_reject_${interaction.user.id}`).setLabel('❌ Reddet').setStyle(ButtonStyle.Danger)
+        );
+
+        await chLog.send({ content: `📢 @here Yetkili onayı bekleniyor!`, embeds: [manualEmbed], components: [row] });
+        return interaction.reply({ content: `✅ **Ekran görüntünüz yetkili ekibimize iletildi!** İncelendikten sonra rolünüz otomatik verilecektir.`, ephemeral: true });
+      }
+
+      // 8. YETKİLİ MANUEL ABONE ROLÜ VERME
+      if (customId.startsWith('btn_abone_staff_grant_')) {
+        if (!isStaffMember(member, data)) {
+          return interaction.reply({ content: '🚫 Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
+        }
+
+        const applicantId = customId.replace('btn_abone_staff_grant_', '');
+        const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
+
+        let roleToAssign = data.aboneRoleId ? interaction.guild.roles.cache.get(data.aboneRoleId) : null;
+        if (!roleToAssign) {
+          roleToAssign = interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('abone') || r.name.toLowerCase().includes('vyron • abone'));
+        }
+
+        if (applicantMember && roleToAssign) {
+          await applicantMember.roles.add(roleToAssign).catch(() => {});
+          try {
+            await applicantMember.send({
+              content: `🎉 **${interaction.guild.name}** YouTube abone ekran görüntünüz yetkilimiz **${member.user.tag}** tarafından manuel onaylandı ve **${roleToAssign.name}** rolünüz verildi! Hoş geldiniz!`
+            });
+          } catch (e) {}
+        }
+
+        const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+          .setColor('#10B981')
+          .setTitle('✅ YETKİLİ TARAFINDAN MANUEL ONAYLANDI')
+          .setDescription(`👤 **Üye:** <@${applicantId}>
+🛡️ **Onaylayan Yetkili:** ${member}
+⏰ **Tarih:** <t:${Math.floor(Date.now() / 1000)}:F>`);
+
+        await interaction.update({ embeds: [updatedEmbed], components: [] });
+        return;
+      }
+
+      // 9. YETKİLİ MANUEL ABONE REDDETME
+      if (customId.startsWith('btn_abone_staff_reject_')) {
+        if (!isStaffMember(member, data)) {
+          return interaction.reply({ content: '🚫 Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
+        }
+
+        const applicantId = customId.replace('btn_abone_staff_reject_', '');
+        const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
+
+        if (applicantMember) {
+          try {
+            await applicantMember.send({
+              content: `❌ **${interaction.guild.name}** YouTube abone ekran görüntünüz yetkilimiz **${member.user.tag}** tarafından incelenmiş ve geçersiz/sahte bulunduğu için reddedilmiştir.`
+            });
+          } catch (e) {}
+        }
+
+        const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+          .setColor('#EF4444')
+          .setTitle('❌ YETKİLİ TARAFINDAN REDDEDİLDİ')
+          .setDescription(`👤 **Üye:** <@${applicantId}>
+🛡️ **Reddeden Yetkili:** ${member}
+⏰ **Tarih:** <t:${Math.floor(Date.now() / 1000)}:F>`);
+
+        await interaction.update({ embeds: [updatedEmbed], components: [] });
+        return;
+      }
+
+
     }
   } catch (err) {
     console.error('Etkileşim hatası:', err);
