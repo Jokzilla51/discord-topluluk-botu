@@ -271,13 +271,14 @@ async function analyzeYoutubeScreenshot(imageUrl, width, height) {
                    compactText.includes('abone') ||
                    compactText.includes('bildirim');
 
-    // 2. HEDEF KANAL KONTROLÜ (1. Kanal: @birimfonksiyons / 2. Kanal: @xFrozzeq)
+    // 2. HEDEF KANAL KONTROLÜ (1. Kanal: @JokSarsılmaz / 2. Kanal: @xFrozzeq)
+    // OCR, Türkçe “ı” karakterini “i” olarak normalleştirdiği için iki yazımı da kabul eder.
     const birimKeywords = [
-      'birim', 'fonksiyon', 'birimfonk', 'birimfonksiyon', 'birimfonksiyons',
-      'fonksiyons', 'vyron', 'birimfnk'
+      'joksarsilmaz', 'joksarsılmaz', 'jok sarsilmaz', 'jok sarsılmaz',
+      'joksars', 'sarsilmaz', 'sarsılmaz'
     ];
     const frozKeywords = [
-      'froz', 'frozzeq', 'xfrozzeq', 'sarsilmaz', 'frozeq', 'xfroz', 'frozsarsilmaz'
+      'froz', 'frozzeq', 'xfrozzeq', 'frozeq', 'xfroz', 'frozzeqyt'
     ];
 
     const detectedBirim = birimKeywords.some(k => cleanText.includes(k) || compactText.includes(k.replace(/[^a-z0-9]/g, '')));
@@ -348,7 +349,7 @@ async function analyzeYoutubeScreenshot(imageUrl, width, height) {
       return {
         isValid: false,
         reason: 'wrong_channel',
-        message: 'Bu ekran görüntüsü @birimfonksiyons veya @xFrozzeq kanallarımıza ait görünmüyor.'
+        message: 'Bu ekran görüntüsü @JokSarsılmaz veya @xFrozzeq kanallarımıza ait görünmüyor.'
       };
     }
 
@@ -874,7 +875,7 @@ client.on('messageCreate', async (message) => {
               .setDescription(
                 `Tebrikler ${message.author}!\n\n` +
                 `Yapay zeka (OCR) ekran görüntülerinizi inceledi ve **her iki resmi YouTube kanalımıza** olan aboneliğinizi onayladı:\n\n` +
-                `✅ **1. Kanal:** \`@birimfonksiyons\` (Abone Olundu)\n` +
+                `✅ **1. Kanal:** \`@JokSarsılmaz\` (Abone Olundu)\n` +
                 `✅ **2. Kanal:** \`@xFrozzeq\` (Abone Olundu)\n\n` +
                 (roleGiven ? `💎 **${roleToAssign.name}** rolünüz otomatik olarak tanımlandı!` : `💎 Abonelikleriniz onaylandı!`) + `\n` +
                 `Ailemize hoş geldiniz! ⚔️`
@@ -907,9 +908,9 @@ client.on('messageCreate', async (message) => {
             // Kısmi Onay (1/2 Kanal Tamamlandı)
             await message.react('🟡').catch(() => {});
 
-            const completedChannel = ocrResult.detectedBirim ? '@birimfonksiyons' : '@xFrozzeq';
-            const missingChannel = !userSubs.birim ? '1. Kanal (@birimfonksiyons)' : '2. Kanal (@xFrozzeq)';
-            const missingLink = !userSubs.birim ? 'https://www.youtube.com/@birimfonksiyons' : 'https://www.youtube.com/@xFrozzeq';
+            const completedChannel = ocrResult.detectedBirim ? '@JokSarsılmaz' : '@xFrozzeq';
+            const missingChannel = !userSubs.birim ? '1. Kanal (@JokSarsılmaz)' : '2. Kanal (@xFrozzeq)';
+            const missingLink = !userSubs.birim ? 'https://www.youtube.com/@JokSars%C4%B1lmaz' : 'https://www.youtube.com/@xFrozzeq';
 
             const partialEmbed = new EmbedBuilder()
               .setColor('#F59E0B')
@@ -946,7 +947,7 @@ client.on('messageCreate', async (message) => {
             failDesc = `Sayın ${message.author},\n\n` +
               `Yüklediğiniz ekran görüntüsünde resmi klan YouTube kanallarımız tespit edilemedi!\n\n` +
               `📌 **Abone Olmanız Gereken Kanallar:**\n` +
-              `1. [1. Kanal: @birimfonksiyons](https://www.youtube.com/@birimfonksiyons)\n` +
+              `1. [1. Kanal: @JokSarsılmaz](https://www.youtube.com/@JokSars%C4%B1lmaz)\n` +
               `2. [2. Kanal: @xFrozzeq](https://www.youtube.com/@xFrozzeq)\n\n` +
               `👉 Lütfen bu kanalların **TAM EKRAN** görüntüsünü yükleyiniz.`;
           }
@@ -1222,7 +1223,7 @@ client.on('interactionCreate', async (interaction) => {
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
             `## ❓ ${roleMention} Almak için ne yapmalısınız?\n\n` +
             `Sadece yapmanız gereken aşağıdaki youtube kanallarına abone olup **TAM EKRANLI BİR ŞEKİLDE** ScreenShot alıp ${channelMention} kanalına SS'i atmanızdır.\n\n` +
-            `📌 **1. Kanal:** https://www.youtube.com/@birimfonksiyons\n` +
+            `📌 **1. Kanal:** https://www.youtube.com/@JokSars%C4%B1lmaz\n` +
             `📌 **2. Kanal:** https://www.youtube.com/@xFrozzeq\n\n` +
             `*(Her iki kanala da abone olmak ve tam ekran SS yüklemek zorunludur).*`
           )
@@ -1230,9 +1231,9 @@ client.on('interactionCreate', async (interaction) => {
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setLabel('🔴 1. Kanal: @birimfonksiyons')
+            .setLabel('🔴 1. Kanal: @JokSarsılmaz')
             .setStyle(ButtonStyle.Link)
-            .setURL('https://www.youtube.com/@birimfonksiyons')
+            .setURL('https://www.youtube.com/@JokSars%C4%B1lmaz')
             .setEmoji('▶️'),
           new ButtonBuilder()
             .setLabel('🔴 2. Kanal: @xFrozzeq')
