@@ -394,6 +394,12 @@ async function connectToVoiceChannel(channel) {
 
     currentVoiceConnection = connection;
 
+    connection.on('error', (error) => {
+      console.error('Discord ses bağlantısı kapandı:', error.message);
+      try { connection.destroy(); } catch (e) {}
+      if (currentVoiceConnection === connection) currentVoiceConnection = null;
+    });
+
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
       try {
         await Promise.race([
@@ -745,40 +751,20 @@ client.once('ready', async () => {
 
   try {
     console.log('⚡ Sunucu verileri ve Slash komutları yükleniyor...');
-    for (const [guildId, guild] of client.guilds.cache) {
-      // 💾 Discord Bulut Veritabanından tüm yetkili rollerini ve ayarları yükle
-      await syncDataFromDiscordCloud(guild).catch(() => {});
-
-      await rest.put(
-        Routes.applicationGuildCommands(client.user.id, guildId),
-        { body: commands.map(cmd => cmd.toJSON()) }
-      );
-      console.log(`✅ Komutlar ve Bulut Verileri yüklendi: ${guild.name} (${guildId})`);
-    }
-
-    // 7/24 discord.gg/vyronmc Oynuyor Durumu & Ses Odasına Giriş
-    client.user.setPresence({
-      activities: [{ name: 'discord.gg/vyronmc', type: ActivityType.Playing }],
-      status: 'online'
-    });
-
-    for (const [guildId, guild] of client.guilds.cache) {
-      const data = loadData();
-      let targetVoice = null;
-      if (data.botVoiceChannelId) {
-        targetVoice = guild.channels.cache.get(data.botVoiceChannelId);
-      }
-      if (!targetVoice) {
-        targetVoice = guild.channels.cache.find(c =>
-          (c.type === ChannelType.GuildVoice || c.type === ChannelType.GuildStageVoice) &&
-          (c.name.toLowerCase().includes('lobi') || c.name.toLowerCase().includes('katil') || c.name.toLowerCase().includes('afk') || c.name.toLowerCase().includes('bekleme'))
-        );
-      }
-      if (targetVoice) {
-        await connectToVoiceChannel(targetVoice).catch(() => {});
+     if (process.env.VOICE_ENABLED === 'true') {
+      for (const [guildId, guild] of client.guilds.cache) {
+        const data = loadData();
+        let targetVoice = null;
+        if (data.botVoiceChannelId) targetVoice = guild.channels.cache.get(data.botVoiceChannelId);
+        if (!targetVoice) {
+          targetVoice = guild.channels.cache.find(c =>
+            (c.type === ChannelType.GuildVoice || c.type === ChannelType.GuildStageVoice) &&
+            ['lobi', 'katil', 'afk', 'bekleme'].some(k => c.name.toLowerCase().includes(k))
+          );
+        }
+        if (targetVoice) await connectToVoiceChannel(targetVoice).catch(() => {});
       }
     }
-
     // Durumu ve sesi periyodik olarak canlı tut
     setInterval(() => {
       try {
@@ -1327,6 +1313,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // 11. /bot-ses (7/24 SES KANALI AYARLAMA)
       if (commandName === 'bot-ses') {
+        if (process.env.VOICE_ENABLED !== 'true') return interaction.reply({ content: '🔇 Render ortamında ses bağlantısı devre dışı.', ephemeral: true });
         if (!isAdmin) return interaction.reply({ content: '🚫 Bu komutu yalnızca Sunucu Yöneticileri kullanabilir!', ephemeral: true });
         const voiceChannel = interaction.options.getChannel('kanal');
 
