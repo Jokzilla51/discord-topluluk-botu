@@ -1006,24 +1006,21 @@ client.on('interactionCreate', async (interaction) => {
         saveData(data);
 
         const applyEmbed = new EmbedBuilder()
-          .setColor('#8B5CF6')
-          .setAuthor({ name: `${interaction.guild.name.toUpperCase()} • RESMİ KLAN ALIMI`, iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle('⚔️ 〖 RESMİ KLAN BAŞVURU MERKEZİ 〗 ⚔️')
+          .setColor('#5865F2')
+          .setAuthor({ name: 'VYRON COMMUNITY • KLAN ALIMI', iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
+          .setTitle('⚔️ Vyron Klan Başvuru Merkezi')
           .setDescription(
-            `╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n` +
-            `  👑 **VYRON KLANINA KATILMAK İÇİN BAŞVUR**\n` +
-            `╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n\n` +
-            `Klanımıza katılmak, espor & klan savaşlarında yer almak istiyorsanız aşağıdaki butona tıklayarak başvuru formunu doldurunuz.\n\n` +
-            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈\n` +
-            `📌 **Başvuru & Alım Şartları:**\n` +
-            `• 🎮 Aktif Minecraft & Elytra / SMP PvP deneyimi\n` +
-            `• 🖥️ **Anydesk / Hile Kontrolünü** eksiksiz kabul etmek\n` +
-            `• 🎙️ Seste mikrofon açabilmek ve saygılı olmak\n` +
-            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈\n\n` +
-            `👇 *Başvuru odanızı açmak için aşağıdaki butona basınız:*`
+            'Vyron ekibine katılmak için kısa başvuru formunu doldurabilirsin. ' +
+            'Başvurun yetkili ekip tarafından gizli bir kanalda incelenir.'
+          )
+          .addFields(
+            { name: '📋 Başvuruda ne sorulur?', value: 'Minecraft kullanıcı adın, tecrüben ve temel iletişim bilgilerin.', inline: false },
+            { name: '🛡️ İnceleme süreci', value: 'Gerekirse yetkili ekip AnyDesk veya hile kontrolü için seninle bu başvuru odasında iletişime geçer.', inline: false },
+            { name: '💡 Başlamadan önce', value: 'Başvuruyu yalnızca kendin için yap; eksiksiz bilgi, sürecin daha hızlı ilerlemesini sağlar.', inline: false }
           )
           .setThumbnail(interaction.guild.iconURL({ dynamic: true, size: 256 }))
-          .setFooter({ text: `${FOOTER_TEXT} • Anydesk Onaylı Alım` });
+          .setFooter({ text: FOOTER_TEXT + ' • Başvuru kanalı yalnızca sen ve yetkililer tarafından görülür' })
+          .setTimestamp();
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
@@ -1113,23 +1110,21 @@ client.on('interactionCreate', async (interaction) => {
         saveData(data);
 
         const ticketEmbed = new EmbedBuilder()
-          .setColor('#3B82F6')
-          .setAuthor({ name: `${interaction.guild.name.toUpperCase()} • DESTEK MERKEZİ`, iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle('🎫 〖 KULLANICI DESTEK & TALEP MERKEZİ 〗 🎫')
+          .setColor('#5865F2')
+          .setAuthor({ name: 'VYRON COMMUNITY • DESTEK', iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
+          .setTitle('💬 Destek Merkezi')
           .setDescription(
-            `Merhaba! Bir sorununuz, talebiniz veya iş birliği teklifiniz mi var?\n` +
-            `Aşağıdaki menüden ilgili departmanı seçerek anında destek talebi oluşturabilirsiniz.\n\n` +
-            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈\n` +
-            `📂 **Mevcut Destek Departmanları:**\n` +
-            `• 🤝 **Partnerlik & Sunucu Anlaşmaları**\n` +
-            `• 🎉 **Çekiliş & Ödül Teslimatı**\n` +
-            `• 📢 **Reklam & Sponsorluk**\n` +
-            `• 🚀 **Server Boost & VIP Avantajları**\n` +
-            `• ⚙️ **Genel Destek & Şikayet**\n` +
-            `◈ ━━━━━━━━━━━━━━━━ ❖ ━━━━━━━━━━━━━━━━ ◈\n\n` +
-            `👇 *Lütfen aşağıdaki menüden işlem türünü seçiniz:*`
+            'Yardıma mı ihtiyacın var? Aşağıdaki menüden konunu seç; senin için yalnızca senin ve yetkili ekibin görebileceği bir destek odası açalım.'
           )
-          .setFooter({ text: `${FOOTER_TEXT} • 7/24 Aktif Destek` });
+          .addFields(
+            { name: '🤝 İş birlikleri', value: 'Partnerlik, reklam ve sponsorluk görüşmeleri.', inline: true },
+            { name: '🎁 Üye desteği', value: 'Çekiliş, ödül, boost ve VIP işlemleri.', inline: true },
+            { name: '🛠️ Genel destek', value: 'Sorular, öneriler ve şikayet bildirimleri.', inline: true },
+            { name: '⏱️ Nasıl çalışır?', value: 'Konuyu seç → özel destek odan açılır → uygun yetkili talebinle ilgilenir.', inline: false }
+          )
+          .setThumbnail(interaction.guild.iconURL({ dynamic: true, size: 256 }))
+          .setFooter({ text: FOOTER_TEXT + ' • Lütfen her konu için yalnızca bir talep oluştur' })
+          .setTimestamp();
 
         const selectMenu = new StringSelectMenuBuilder()
           .setCustomId('ticket_select_category')
@@ -1198,22 +1193,20 @@ client.on('interactionCreate', async (interaction) => {
         const channelMention = data.aboneChannelId ? `<#${data.aboneChannelId}>` : targetChannel;
 
         const aboneEmbed = new EmbedBuilder()
-          .setColor('#EF4444')
-          .setAuthor({ name: 'Vyron Abone Rolü Bilgilendirme', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle('🔴 VYRON ABONE ROLÜ BİLGİLENDİRME')
+          .setColor('#5865F2')
+          .setAuthor({ name: 'VYRON COMMUNITY • ABONE DOĞRULAMA', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
+          .setTitle('▶️ Abone Rolü Doğrulama Merkezi')
           .setDescription(
-            `## 🌟 ${roleMention} içeriği nedir?\n\n` +
-            `> 💎 **O Arayıp Bulamadığınız Profil kodları ve Texture Packler**\n\n` +
-            `> 🎁 **Private Buton Packleri** Haftada bir kişiye özel buton pack'i kazanma şansı!\n\n` +
-            `> ⚔️ **Abonelere özel çekilişler (gear, kredi, vip)**\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `## ❓ ${roleMention} Almak için ne yapmalısınız?\n\n` +
-            `Sadece yapmanız gereken aşağıdaki youtube kanallarına abone olup **TAM EKRANLI BİR ŞEKİLDE** ScreenShot alıp ${channelMention} kanalına SS'i atmanızdır.\n\n` +
-            `📌 **1. Kanal:** https://www.youtube.com/@JokSars%C4%B1lmaz\n` +
-            `📌 **2. Kanal:** https://www.youtube.com/@xFrozzeq\n\n` +
-            `*(Her iki kanala da abone olmak ve tam ekran SS yüklemek zorunludur).*`
+            roleMention + ' rolünü almak için iki resmi YouTube kanalına abone ol ve tam ekran ekran görüntünü belirtilen kanala gönder.'
           )
-          .setFooter({ text: `${FOOTER_TEXT} • Yapay Zeka (OCR) Doğrulama` });
+          .addFields(
+            { name: '1. Abone ol', value: 'Aşağıdaki iki resmi kanalın ikisine de abone ol.', inline: false },
+            { name: '2. Tam ekran görüntü al', value: 'Telefon veya bilgisayar ekranının tamamı görünecek şekilde ekran görüntüsü oluştur.', inline: false },
+            { name: '3. Görseli gönder', value: 'Ekran görüntünü ' + channelMention + ' kanalına yükle. Sistem otomatik kontrol eder; gerekirse yetkiliye iletebilirsin.', inline: false }
+          )
+          .setThumbnail(guild.iconURL({ dynamic: true, size: 256 }))
+          .setFooter({ text: FOOTER_TEXT + ' • Otomatik OCR doğrulaması' })
+          .setTimestamp();
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
