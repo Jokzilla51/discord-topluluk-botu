@@ -53,18 +53,71 @@ try {
 // 1. WEB SUNUCUSU (RENDER 7/24 UPTIME)
 // ==========================================
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end('<h1>⚔️ Vyron Ticket, Klan Başvuru & OCR Abone Botu 7/24 Aktif!</h1>');
-}).listen(PORT, () => {
-  console.log(`🌐 Web sunucusu ${PORT} portunda aktif.`);
-});
+if (require.main === module) {
+  http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<h1>⚔️ Vyron Community Systems aktif</h1>');
+  }).listen(PORT, () => {
+    console.log(`🌐 Web sunucusu ${PORT} portunda aktif.`);
+  });
+}
 
 // ==========================================
 // 2. VERİ YÖNETİMİ & DISCORD BULUT VERİTABANI
 // ==========================================
 const DATA_FILE = path.join(__dirname, 'data.json');
-const FOOTER_TEXT = 'Vyron Klanı • Güvenli Sistemler';
+const FOOTER_TEXT = 'VYRON • Profosyonel456 tarafından geliştirildi';
+const VYRON_COLORS = Object.freeze({
+  primary: '#7C3AED',
+  secondary: '#5865F2',
+  success: '#22C55E',
+  warning: '#F59E0B',
+  danger: '#EF4444'
+});
+
+function createVyronPanel(guild, clientUser, section, title, description, color = VYRON_COLORS.primary) {
+  const iconURL = guild?.iconURL({ dynamic: true, size: 256 }) || clientUser?.displayAvatarURL({ size: 256 });
+  return new EmbedBuilder()
+    .setColor(color)
+    .setAuthor({ name: `VYRON • ${section}`, iconURL })
+    .setTitle(title)
+    .setDescription(description)
+    .setThumbnail(iconURL)
+    .setFooter({ text: FOOTER_TEXT, iconURL })
+    .setTimestamp();
+}
+
+function normalizeTagValue(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/^[^a-zA-Z0-9]+/, '')
+    .trim()
+    .toLowerCase();
+}
+
+function memberHasConfiguredTag(member, configuredTag) {
+  const identity = member?.user?.primaryGuild;
+  return Boolean(
+    identity?.identityEnabled === true &&
+    identity.identityGuildId === member?.guild?.id &&
+    normalizeTagValue(identity.tag) === normalizeTagValue(configuredTag)
+  );
+}
+
+function isLikelyStaffRoleName(name) {
+  const normalized = normalizeTagValue(name).replace(/[._-]+/g, ' ');
+  return /(^|\s)(yonetici|yetkili|moderator|mod|admin|staff)(\s|$)/i.test(normalized);
+}
+
+function isTagScanTarget(member, data = {}) {
+  if (!member || member.user?.bot) return false;
+  if (data.clanRoleId && member.roles?.cache?.has(data.clanRoleId)) return true;
+  return member.roles?.cache?.some(role =>
+    /(^|\s)(klan uyesi|has klan uyesi)(\s|$)/i.test(normalizeTagValue(role.name)) ||
+    isLikelyStaffRoleName(role.name)
+  ) || false;
+}
 
 function loadData() {
   try {
@@ -258,18 +311,19 @@ async function analyzeYoutubeScreenshot(imageUrl, width, height) {
     const compactText = cleanText.replace(/[^a-z0-9]/g, '');
 
     // 1. ABONELİK İBARESİ KONTROLÜ (Genişletilmiş Kelime Havuzu)
-    const subKeywords = [
-      'abone', 'olundu', 'abonesin', 'abonesiniz', 'abonelik', 'subscribed',
-      'subscriber', 'subscribers', 'subbed', 'abonniert', 'abonne', 'suscrito',
-      'bildirim', 'bildirimler', 'zil', 'tumu', 'tum bildirimler', 'all notifications',
-      'abone ol'
+    const subscribedPhrases = [
+      'abone olundu', 'abonesiniz', 'subscribed', 'subscription active',
+      'abonniert', 'abonne', 'suscrito'
     ];
-    const hasSub = subKeywords.some(k => cleanText.includes(k)) ||
-                   compactText.includes('aboneolundu') ||
-                   compactText.includes('abonesiniz') ||
-                   compactText.includes('subscribed') ||
-                   compactText.includes('abone') ||
-                   compactText.includes('bildirim');
+    const hasSubscribeCallToAction =
+      (cleanText.includes('abone ol') || compactText.includes('aboneol')) &&
+      !cleanText.includes('abone olundu') && !compactText.includes('aboneolundu');
+    const hasSub = !hasSubscribeCallToAction && (
+      subscribedPhrases.some(k => cleanText.includes(k)) ||
+      compactText.includes('aboneolundu') ||
+      compactText.includes('abonesiniz') ||
+      compactText.includes('subscribed')
+    );
 
     // 2. HEDEF KANAL KONTROLÜ (1. Kanal: @JokSarsılmaz / 2. Kanal: @xFrozzeq)
     // OCR, Türkçe “ı” karakterini “i” olarak normalleştirdiği için iki yazımı da kabul eder.
@@ -1005,27 +1059,25 @@ client.on('interactionCreate', async (interaction) => {
         if (category) data.applyCategoryId = category.id;
         saveData(data);
 
-        const applyEmbed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setAuthor({ name: 'VYRON COMMUNITY • KLAN ALIMI', iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle('⚔️ Vyron Klan Başvuru Merkezi')
-          .setDescription(
-            'Vyron ekibine katılmak için kısa başvuru formunu doldurabilirsin. ' +
-            'Başvurun yetkili ekip tarafından gizli bir kanalda incelenir.'
-          )
+        const applyEmbed = createVyronPanel(
+          interaction.guild,
+          client.user,
+          'KLAN BAŞVURU MERKEZİ',
+          '⚔️ Vyron Ekibine Katıl',
+          'Takımın bir parçası olmak istiyorsan aşağıdaki butondan başvurunu başlat. Yanıtların yalnızca sen ve yetkili ekip tarafından görüntülenir.'
+        )
           .addFields(
-            { name: '📋 Başvuruda ne sorulur?', value: 'Minecraft kullanıcı adın, tecrüben ve temel iletişim bilgilerin.', inline: false },
-            { name: '🛡️ İnceleme süreci', value: 'Gerekirse yetkili ekip AnyDesk veya hile kontrolü için seninle bu başvuru odasında iletişime geçer.', inline: false },
-            { name: '💡 Başlamadan önce', value: 'Başvuruyu yalnızca kendin için yap; eksiksiz bilgi, sürecin daha hızlı ilerlemesini sağlar.', inline: false }
+            { name: '01  FORM', value: 'Minecraft adını ve deneyimini paylaş.', inline: true },
+            { name: '02  İNCELEME', value: 'Yetkili ekip başvurunu değerlendirir.', inline: true },
+            { name: '03  SONUÇ', value: 'Karar sana özel odadan bildirilir.', inline: true },
+            { name: '🔒 Gizlilik', value: 'Başvuru odasını yalnızca sen ve başvuru yetkilileri görebilir.', inline: false }
           )
-          .setThumbnail(interaction.guild.iconURL({ dynamic: true, size: 256 }))
-          .setFooter({ text: FOOTER_TEXT + ' • Başvuru kanalı yalnızca sen ve yetkililer tarafından görülür' })
-          .setTimestamp();
+          .setFooter({ text: `${FOOTER_TEXT} • Güvenli başvuru sistemi` });
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId('btn_open_apply_main')
-            .setLabel('⚔️ Klan Başvurusu Yap')
+            .setLabel('Başvuruyu Başlat')
             .setStyle(ButtonStyle.Primary)
             .setEmoji('📝')
         );
@@ -1109,26 +1161,25 @@ client.on('interactionCreate', async (interaction) => {
         if (category) data.ticketCategoryId = category.id;
         saveData(data);
 
-        const ticketEmbed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setAuthor({ name: 'VYRON COMMUNITY • DESTEK', iconURL: interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle('💬 Destek Merkezi')
-          .setDescription(
-            'Yardıma mı ihtiyacın var? Aşağıdaki menüden konunu seç; senin için yalnızca senin ve yetkili ekibin görebileceği bir destek odası açalım.'
-          )
+        const ticketEmbed = createVyronPanel(
+          interaction.guild,
+          client.user,
+          'DESTEK MERKEZİ',
+          '💬 Sana Nasıl Yardımcı Olabiliriz?',
+          'Konunu menüden seç. Bot birkaç saniye içinde yalnızca senin ve destek ekibinin görebileceği özel bir oda oluşturur.',
+          VYRON_COLORS.secondary
+        )
           .addFields(
-            { name: '🤝 İş birlikleri', value: 'Partnerlik, reklam ve sponsorluk görüşmeleri.', inline: true },
-            { name: '🎁 Üye desteği', value: 'Çekiliş, ödül, boost ve VIP işlemleri.', inline: true },
-            { name: '🛠️ Genel destek', value: 'Sorular, öneriler ve şikayet bildirimleri.', inline: true },
-            { name: '⏱️ Nasıl çalışır?', value: 'Konuyu seç → özel destek odan açılır → uygun yetkili talebinle ilgilenir.', inline: false }
+            { name: '🤝 İş Birliği', value: 'Partnerlik, reklam ve sponsorluk', inline: true },
+            { name: '🎁 Ödül & VIP', value: 'Çekiliş, boost ve teslim işlemleri', inline: true },
+            { name: '🛠️ Üye Desteği', value: 'Soru, öneri ve şikâyetler', inline: true },
+            { name: '⏱️ Süreç', value: '`Konu seç → Özel oda açılsın → Yetkili ilgilensin`', inline: false }
           )
-          .setThumbnail(interaction.guild.iconURL({ dynamic: true, size: 256 }))
-          .setFooter({ text: FOOTER_TEXT + ' • Lütfen her konu için yalnızca bir talep oluştur' })
-          .setTimestamp();
+          .setFooter({ text: `${FOOTER_TEXT} • Her konu için yalnızca bir talep aç` });
 
         const selectMenu = new StringSelectMenuBuilder()
           .setCustomId('ticket_select_category')
-          .setPlaceholder('📂 Destek almak istediğiniz konuyu seçiniz...')
+          .setPlaceholder('Destek konunu seç...')
           .addOptions([
             { label: 'Partnerlik & Anlaşma', value: 'partner', emoji: '🤝', description: 'Sunucu partnerlik görüşmeleri' },
             { label: 'Çekiliş & Ödül Teslim', value: 'giveaway', emoji: '🎉', description: 'Kazandığınız ödüllerin teslimatı' },
@@ -1192,30 +1243,30 @@ client.on('interactionCreate', async (interaction) => {
         const roleMention = roleToUse ? `<@&${roleToUse.id}>` : '@Vyron • Abone';
         const channelMention = data.aboneChannelId ? `<#${data.aboneChannelId}>` : targetChannel;
 
-        const aboneEmbed = new EmbedBuilder()
-          .setColor('#5865F2')
-          .setAuthor({ name: 'VYRON COMMUNITY • ABONE DOĞRULAMA', iconURL: guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL() })
-          .setTitle('▶️ Abone Rolü Doğrulama Merkezi')
-          .setDescription(
-            roleMention + ' rolünü almak için iki resmi YouTube kanalına abone ol ve tam ekran ekran görüntünü belirtilen kanala gönder.'
-          )
+        const aboneEmbed = createVyronPanel(
+          guild,
+          client.user,
+          'ABONE DOĞRULAMA',
+          '▶️ Özel İçeriklere Erişim Kazan',
+          `${roleMention} rolünü almak için iki resmi kanalımızı takip et ve aboneliğini doğrula.`,
+          '#FF0033'
+        )
           .addFields(
-            { name: '1. Abone ol', value: 'Aşağıdaki iki resmi kanalın ikisine de abone ol.', inline: false },
-            { name: '2. Tam ekran görüntü al', value: 'Telefon veya bilgisayar ekranının tamamı görünecek şekilde ekran görüntüsü oluştur.', inline: false },
-            { name: '3. Görseli gönder', value: 'Ekran görüntünü ' + channelMention + ' kanalına yükle. Sistem otomatik kontrol eder; gerekirse yetkiliye iletebilirsin.', inline: false }
+            { name: '1  ABONE OL', value: '`@JokSarsilmaz` ve `@xFrozzeq` kanallarının ikisine de abone ol.', inline: false },
+            { name: '2  KANITINI HAZIRLA', value: 'Her kanal için abonelik durumu ve ekranın tamamı görünecek şekilde ayrı bir görüntü al.', inline: false },
+            { name: '3  DOĞRULA', value: `İki görüntüyü ${channelMention} kanalına gönder. Sistem 2/2 tamamlandığında rolünü otomatik verir.`, inline: false },
+            { name: '✨ Abone ayrıcalıkları', value: 'Özel paketler • Abone çekilişleri • VIP ve ödül fırsatları', inline: false }
           )
-          .setThumbnail(guild.iconURL({ dynamic: true, size: 256 }))
-          .setFooter({ text: FOOTER_TEXT + ' • Otomatik OCR doğrulaması' })
-          .setTimestamp();
+          .setFooter({ text: `${FOOTER_TEXT} • Güvenli 2/2 OCR doğrulaması` });
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setLabel('🔴 1. Kanal: @JokSarsılmaz')
+            .setLabel('Jok Sarsılmaz')
             .setStyle(ButtonStyle.Link)
             .setURL('https://www.youtube.com/@JokSars%C4%B1lmaz')
             .setEmoji('▶️'),
           new ButtonBuilder()
-            .setLabel('🔴 2. Kanal: @xFrozzeq')
+            .setLabel('xFrozzeq')
             .setStyle(ButtonStyle.Link)
             .setURL('https://www.youtube.com/@xFrozzeq')
             .setEmoji('▶️')
@@ -1848,61 +1899,85 @@ client.on('interactionCreate', async (interaction) => {
         const refMessage = interaction.message.reference ? await interaction.channel.messages.fetch(interaction.message.reference.messageId).catch(() => null) : null;
         const imgUrl = refMessage?.attachments?.first()?.url || null;
 
-        const manualEmbed = new EmbedBuilder()
-          .setColor('#F59E0B')
-          .setAuthor({ name: `${guild.name} • Manuel Abone Onay Talebi`, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) })
-          .setTitle('✋ 〖 YETKİLİ MANUEL ABONE ONAYI BEKLENİYOR 〗')
-          .setDescription(
+        if (!data.userSubscribedChannels) data.userSubscribedChannels = {};
+        if (!data.userSubscribedChannels[applicantId]) {
+          data.userSubscribedChannels[applicantId] = { birim: false, froz: false };
+          saveData(data);
+        }
+
+        const manualEmbed = createVyronPanel(
+          guild, client.user, 'MANUEL ABONE İNCELEMESİ', '✋ Yetkili Kontrolü Bekleniyor',
             `Kullanıcı ${interaction.user} (\`${interaction.user.tag}\` - \`${interaction.user.id}\`) yapay zekanın okuyamadığı ekran görüntüsü için **manuel yetkili onayı** talep etti.
 
 ` +
-            `🔍 Lütfen aşağıdaki görseli inceleyip onaylayınız veya reddediniz:`
+            'Her kanalı ayrı ayrı kontrol et. Rol yalnızca iki kanal da onaylandığında verilir.',
+          VYRON_COLORS.warning
           )
-          .setFooter({ text: FOOTER_TEXT })
-          .setTimestamp();
+          .addFields(
+            { name: 'Kanal 1', value: '⬜ `@JokSarsilmaz` bekliyor', inline: true },
+            { name: 'Kanal 2', value: '⬜ `@xFrozzeq` bekliyor', inline: true }
+          );
 
         if (imgUrl) manualEmbed.setImage(imgUrl);
 
         const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`btn_abone_staff_grant_${interaction.user.id}`).setLabel('✅ Abone Rolü Ver (Onayla)').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(`btn_abone_staff_reject_${interaction.user.id}`).setLabel('❌ Reddet').setStyle(ButtonStyle.Danger)
+          new ButtonBuilder().setCustomId(`btn_abone_staff_mark_jok_${interaction.user.id}`).setLabel('Jok Sarsılmaz Onayla').setEmoji('1️⃣').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`btn_abone_staff_mark_froz_${interaction.user.id}`).setLabel('xFrozzeq Onayla').setEmoji('2️⃣').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`btn_abone_staff_reject_${interaction.user.id}`).setLabel('Kanıtı Reddet').setEmoji('✖️').setStyle(ButtonStyle.Danger)
         );
 
         await chLog.send({ content: `📢 @here Yetkili onayı bekleniyor!`, embeds: [manualEmbed], components: [row] });
         return interaction.reply({ content: `✅ **Ekran görüntünüz yetkili ekibimize iletildi!** İncelendikten sonra rolünüz otomatik verilecektir.`, ephemeral: true });
       }
 
-      // 8. YETKİLİ MANUEL ABONE ROLÜ VERME
-      if (customId.startsWith('btn_abone_staff_grant_')) {
+      // 8. YETKİLİ MANUEL 2/2 ABONE ONAYI
+      if (customId.startsWith('btn_abone_staff_mark_jok_') || customId.startsWith('btn_abone_staff_mark_froz_')) {
         if (!isStaffMember(member, data)) {
           return interaction.reply({ content: '🚫 Bu işlemi yalnızca yetkililer yapabilir!', ephemeral: true });
         }
 
-        const applicantId = customId.replace('btn_abone_staff_grant_', '');
+        const isJok = customId.startsWith('btn_abone_staff_mark_jok_');
+        const applicantId = customId.replace(isJok ? 'btn_abone_staff_mark_jok_' : 'btn_abone_staff_mark_froz_', '');
         const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
+
+        if (!data.userSubscribedChannels) data.userSubscribedChannels = {};
+        if (!data.userSubscribedChannels[applicantId]) data.userSubscribedChannels[applicantId] = { birim: false, froz: false };
+        const userSubs = data.userSubscribedChannels[applicantId];
+        if (isJok) userSubs.birim = true;
+        else userSubs.froz = true;
+        saveData(data);
+        const hasBothChannels = userSubs.birim && userSubs.froz;
 
         let roleToAssign = data.aboneRoleId ? interaction.guild.roles.cache.get(data.aboneRoleId) : null;
         if (!roleToAssign) {
           roleToAssign = interaction.guild.roles.cache.find(r => r.name.toLowerCase().includes('abone') || r.name.toLowerCase().includes('vyron • abone'));
         }
 
-        if (applicantMember && roleToAssign) {
+        if (hasBothChannels && applicantMember && roleToAssign) {
           await applicantMember.roles.add(roleToAssign).catch(() => {});
           try {
             await applicantMember.send({
-              content: `🎉 **${interaction.guild.name}** YouTube abone ekran görüntünüz yetkilimiz **${member.user.tag}** tarafından manuel onaylandı ve **${roleToAssign.name}** rolünüz verildi! Hoş geldiniz!`
+              content: `🎉 **${interaction.guild.name}** için iki YouTube aboneliğin de onaylandı ve **${roleToAssign.name}** rolün verildi.`
             });
           } catch (e) {}
         }
 
         const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-          .setColor('#10B981')
-          .setTitle('✅ YETKİLİ TARAFINDAN MANUEL ONAYLANDI')
-          .setDescription(`👤 **Üye:** <@${applicantId}>
-🛡️ **Onaylayan Yetkili:** ${member}
-⏰ **Tarih:** <t:${Math.floor(Date.now() / 1000)}:F>`);
+          .setColor(hasBothChannels ? VYRON_COLORS.success : VYRON_COLORS.warning)
+          .setTitle(hasBothChannels ? '✅ 2/2 Kanal Manuel Onaylandı' : '🟡 1/2 Kanal Onaylandı')
+          .setDescription(`👤 **Üye:** <@${applicantId}>\n🛡️ **Kontrol eden:** ${member}\n⏰ **Tarih:** <t:${Math.floor(Date.now() / 1000)}:F>`)
+          .setFields(
+            { name: 'Kanal 1', value: `${userSubs.birim ? '✅' : '⬜'} \`@JokSarsilmaz\``, inline: true },
+            { name: 'Kanal 2', value: `${userSubs.froz ? '✅' : '⬜'} \`@xFrozzeq\``, inline: true }
+          );
 
-        await interaction.update({ embeds: [updatedEmbed], components: [] });
+        const nextComponents = hasBothChannels ? [] : [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`btn_abone_staff_mark_jok_${applicantId}`).setLabel('Jok Sarsılmaz Onayla').setEmoji('1️⃣').setStyle(ButtonStyle.Success).setDisabled(userSubs.birim),
+          new ButtonBuilder().setCustomId(`btn_abone_staff_mark_froz_${applicantId}`).setLabel('xFrozzeq Onayla').setEmoji('2️⃣').setStyle(ButtonStyle.Success).setDisabled(userSubs.froz),
+          new ButtonBuilder().setCustomId(`btn_abone_staff_reject_${applicantId}`).setLabel('Kanıtı Reddet').setEmoji('✖️').setStyle(ButtonStyle.Danger)
+        )];
+
+        await interaction.update({ embeds: [updatedEmbed], components: nextComponents });
         return;
       }
 
@@ -1944,4 +2019,16 @@ client.on('interactionCreate', async (interaction) => {
 // ==========================================
 // 9. BOT BAŞLATMA
 // ==========================================
-client.login(process.env.TOKEN);
+if (require.main === module) {
+  client.login(process.env.TOKEN);
+}
+
+module.exports = {
+  client,
+  commands,
+  analyzeYoutubeScreenshot,
+  normalizeTagValue,
+  memberHasConfiguredTag,
+  isLikelyStaffRoleName,
+  isTagScanTarget
+};

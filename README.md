@@ -1,4 +1,15 @@
-# Vyron Discord Topluluk Botu v2.1.2
+# Vyron Community Systems v3.0.0
+
+Modern Vyron tasarım diliyle yenilenen destek, klan başvuru ve abone panelleri; güvenli 2/2 YouTube doğrulaması ve tek bot altında topluluk yönetimi.
+
+## v3.0 yenilikleri
+
+- Birinci YouTube kanalı `@JokSarsilmaz` olarak güncellendi.
+- `Abone Ol` butonu artık yanlışlıkla abonelik kanıtı sayılmıyor.
+- Manuel onayda iki kanal ayrı ayrı doğrulanmadan rol verilmiyor.
+- Eski çalışma zamanı yama sistemi devre dışı bırakıldı; düzeltmeler doğrudan ana kaynak kodda.
+- Destek, klan başvuru ve abone panelleri ortak modern Vyron kimliğine geçirildi.
+- Test sırasında botun Discord'a bağlanması ve web portu açması engellendi.
 
 Discord.js v14 tabanlı; ticket, klan başvurusu, moderasyon, çekiliş, anket, yetkili istatistiği, seviye, güvenlik ve OCR ile YouTube abonelik kontrolünü tek botta birleştiren topluluk botu.
 

@@ -1,13 +1,12 @@
 {
   "name": "discord-allinone-bot",
-  "version": "2.2.0",
-  "description": "Vyron ticket, klan başvuru, ses ve 2/2 YouTube abone doğrulama botu",
+  "version": "3.0.0",
+  "description": "Vyron Community Systems: modern paneller, destek, klan ve güvenli 2/2 YouTube doğrulama",
   "main": "index.js",
   "scripts": {
-    "postinstall": "node scripts/prepare-runtime-fixes.js && node --check index.js",
-    "prestart": "node scripts/prepare-runtime-fixes.js",
+    "postinstall": "node --check index.js",
     "start": "node index.js",
-    "check": "node scripts/prepare-runtime-fixes.js && node --check index.js"
+    "check": "node --check index.js && node --test"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
